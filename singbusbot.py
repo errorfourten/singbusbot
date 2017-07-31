@@ -27,19 +27,18 @@ def get_last_update_id(updates):
         update_ids.append(int(update["update_id"]))
     return max(update_ids)
 
-def check_valid_bus_stop(updates):
+def check_valid_bus_stop(busStopCode):
     with open("busStop.txt", "rb") as afile:
         busStop = pickle.load(afile)
     flag=0
     for sublist in busStop:
-        if egbus in sublist:
-            print("Yes")
-            print(sublist)
+        if busStopCode in sublist:
+            return True
             flag = 1
             break
     if flag!=1:
-        print("Please enter a valid bus stop code")
-        
+        return False
+
 def send_bus_timings(updates):
     #Check myDatamall
     text = ""
@@ -50,29 +49,31 @@ def send_bus_timings(updates):
         except KeyError:
             busStopCode = update["edited_message"]["text"]
             chat_id = update["edited_message"]["chat"]["id"]
-        busStopCode = update["message"]["text"]
 
-        url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
-        url += busStopCode
-        request = urllib.request.Request(url)
-        request.add_header('AccountKey', LTA_Account_Key)
-        response = urllib.request.urlopen(request)
-        pjson = json.loads(response.read().decode("utf-8"))
-        x = 0
+        if check_valid_bus_stop(busStopCode) == False:
+            text = "Please enter a valid bus stop code"
+        else:
+            url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
+            url += busStopCode
+            request = urllib.request.Request(url)
+            request.add_header('AccountKey', LTA_Account_Key)
+            response = urllib.request.urlopen(request)
+            pjson = json.loads(response.read().decode("utf-8"))
+            x = 0
 
-        for service in pjson["Services"]:
-            nextBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
-            currentTime = (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).replace(microsecond=0)
-            if currentTime > nextBusTime:
-                nextBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
-            timeLeft = str((nextBusTime - currentTime)).split(":")[1]
+            for service in pjson["Services"]:
+                nextBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+                currentTime = (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).replace(microsecond=0)
+                if currentTime > nextBusTime:
+                    nextBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+                timeLeft = str((nextBusTime - currentTime)).split(":")[1]
 
-            if (timeLeft == "00"):
-                text += service["ServiceNo"]+"    "+"Arr"
-            else:
-                text += service["ServiceNo"]+"    "+timeLeft+" min"
-            text += "\n"
-            x+=1
+                if (timeLeft == "00"):
+                    text += service["ServiceNo"]+"    "+"Arr"
+                else:
+                    text += service["ServiceNo"]+"    "+timeLeft+" min"
+                text += "\n"
+                x+=1
 
     send_message(text, chat_id)
 
