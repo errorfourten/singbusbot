@@ -33,7 +33,7 @@ def check_valid_bus_stop(busStopCode):
     flag=0
     for sublist in busStop:
         if busStopCode in sublist:
-            return True
+            return sublist[1]
             flag = 1
             break
     if flag!=1:
@@ -50,9 +50,11 @@ def send_bus_timings(updates):
             busStopCode = update["edited_message"]["text"]
             chat_id = update["edited_message"]["chat"]["id"]
 
-        if check_valid_bus_stop(busStopCode) == False:
+        busStopName = check_valid_bus_stop(busStopCode)
+        if busStopName == False:
             text = "Please enter a valid bus stop code"
         else:
+            text += busStopCode + " - " + busStopName
             url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
             url += busStopCode
             request = urllib.request.Request(url)
@@ -69,10 +71,9 @@ def send_bus_timings(updates):
                 timeLeft = str((nextBusTime - currentTime)).split(":")[1]
 
                 if (timeLeft == "00"):
-                    text += service["ServiceNo"]+"    "+"Arr"
+                    text += service["ServiceNo"]+"    "+"Arr"+"\n"
                 else:
-                    text += service["ServiceNo"]+"    "+timeLeft+" min"
-                text += "\n"
+                    text += service["ServiceNo"]+"    "+timeLeft+" min"+"\n"
                 x+=1
 
     send_message(text, chat_id)
