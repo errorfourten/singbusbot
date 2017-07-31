@@ -54,7 +54,7 @@ def send_bus_timings(updates):
 
         busStopName = check_valid_bus_stop(busStopCode)
         if busStopName == False:
-            telegramReturn = telegramCommands.check_commands(busStopName)
+            telegramReturn = telegramCommands.check_commands(busStopCode)
             if telegramReturn == False:
                 text = "Please enter a valid bus stop code"
             else:
