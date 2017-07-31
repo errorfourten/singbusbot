@@ -1,0 +1,8 @@
+certifi==2017.7.27.1
+chardet==3.0.4
+DateTime==4.2
+idna==2.5
+pytz==2017.2
+requests==2.18.2
+urllib3==1.22
+zope.interface==4.4.2
