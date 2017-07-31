@@ -50,7 +50,7 @@ def send_bus_timings(updates):
             busStopCode = update["edited_message"]["text"]
             chat_id = update["edited_message"]["chat"]["id"]
 
-        print("Request from: "+update["message"]["chat"]+", "+busStopCode)
+        print("Request from: "+str(update["message"]["chat"])+", "+busStopCode)
 
         busStopName = check_valid_bus_stop(busStopCode)
         if busStopName == False:
