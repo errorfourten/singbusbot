@@ -54,7 +54,7 @@ def send_bus_timings(updates):
         if busStopName == False:
             text = "Please enter a valid bus stop code"
         else:
-            text += busStopCode + " - " + busStopName + "\n"
+            text += "**" + busStopCode + " - " + busStopName + "**\n"
             url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
             url += busStopCode
             request = urllib.request.Request(url)
@@ -65,15 +65,26 @@ def send_bus_timings(updates):
 
             for service in pjson["Services"]:
                 nextBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+                followingBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
                 currentTime = (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).replace(microsecond=0)
                 if currentTime > nextBusTime:
                     nextBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+                    followingBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus3"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
                 timeLeft = str((nextBusTime - currentTime)).split(":")[1]
+                timeFollowingLeft = str((followingBusTime - currentTime)).split(":")[1]
 
+                text += service["ServiceNo"]+"    "
                 if (timeLeft == "00"):
-                    text += service["ServiceNo"]+"    "+"Arr"+"\n"
+                    text += "Arr"
                 else:
-                    text += service["ServiceNo"]+"    "+timeLeft+" min"+"\n"
+                    text += timeLeft+" min"
+                text += "    "
+                if (timeFollowingLeft == "00"):
+                    text += "Arr"
+                else:
+                    text += timeFollowingLeft+" min"
+                text += "\n"
+
                 x+=1
 
     send_message(text, chat_id)
