@@ -54,7 +54,7 @@ def send_bus_timings(updates):
         if busStopName == False:
             text = "Please enter a valid bus stop code"
         else:
-            text += busStopCode + " - " + busStopName
+            text += busStopCode + " - " + busStopName + "\n"
             url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
             url += busStopCode
             request = urllib.request.Request(url)
