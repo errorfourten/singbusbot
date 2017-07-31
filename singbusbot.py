@@ -54,7 +54,7 @@ def send_bus_timings(updates):
         if busStopName == False:
             text = "Please enter a valid bus stop code"
         else:
-            text += "**" + busStopCode + " - " + busStopName + "**\n"
+            text += "*" + busStopCode + " - " + busStopName + "*\n"
             url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
             url += busStopCode
             request = urllib.request.Request(url)
@@ -98,7 +98,7 @@ def get_last_chat(updates):
 
 def send_message(text, chat_id):
     text = urllib.parse.quote_plus(text)
-    url = URL + "sendMessage?text={}&chat_id={}".format(text, chat_id)
+    url = URL + "sendMessage?text={}&chat_id={}&parse_mode=Markdown".format(text, chat_id)
     get_url(url)
 
 def main():
