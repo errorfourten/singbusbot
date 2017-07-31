@@ -70,16 +70,20 @@ def send_bus_timings(updates):
                 try:
                     followingBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
                 except:
-                    followingBusTime = "NA"
+                    followingBusTime = False
                 currentTime = (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).replace(microsecond=0)
                 if currentTime > nextBusTime:
                     nextBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
                     try:
                         followingBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus3"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
                     except:
-                        followingBusTime = "NA"
+                        followingBusTime = False
                 timeLeft = str((nextBusTime - currentTime)).split(":")[1]
-                timeFollowingLeft = str((followingBusTime - currentTime)).split(":")[1]
+
+                if followingBusTime == False:
+                    timeFollowingLeft = "NA"
+                else:
+                    timeFollowingLeft = str((followingBusTime - currentTime)).split(":")[1]
 
                 text += service["ServiceNo"]+"    "
                 if (timeLeft == "00"):
