@@ -1,4 +1,4 @@
-import json, requests, time, urllib, datetime, updateBusData, pickle, os, sys
+import json, requests, time, urllib, datetime, updateBusData, pickle, os, sys, telegramCommands
 
 TOKEN = os.getenv("TOKEN")
 LTA_Account_Key = os.getenv("LTA_Account_Key")
@@ -54,7 +54,11 @@ def send_bus_timings(updates):
 
         busStopName = check_valid_bus_stop(busStopCode)
         if busStopName == False:
-            text = "Please enter a valid bus stop code"
+            telegramReturn = telegramCommands.check_commands(busStopName)
+            if telegramReturn == False:
+                text = "Please enter a valid bus stop code"
+            else:
+                text = telegramReturn
         else:
             text += "*" + busStopCode + " - " + busStopName + "*\n"
             url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
