@@ -27,11 +27,19 @@ def get_last_update_id(updates):
         update_ids.append(int(update["update_id"]))
     return max(update_ids)
 
-def check_bus_stop(updates):
+def check_valid_bus_stop(updates):
     with open("busStop.txt", "rb") as afile:
         busStop = pickle.load(afile)
-
-
+    flag=0
+    for sublist in busStop:
+        if egbus in sublist:
+            print("Yes")
+            print(sublist)
+            flag = 1
+            break
+    if flag!=1:
+        print("Please enter a valid bus stop code")
+        
 def send_bus_timings(updates):
     #Check myDatamall
     text = ""
