@@ -19,9 +19,4 @@ def updateBusStop():
     with open("busStop.txt", "wb") as outfile:
         pickle.dump(toAdd, outfile)
 
-
-def main():
-    updateBusStop()
-
-if __name__ == '__main__':
-    main()
+updateBusStop()
