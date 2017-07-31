@@ -1,4 +1,4 @@
-import json, requests, time, urllib, datetime, updateBusData, pickle, os
+import json, requests, time, urllib, datetime, updateBusData, pickle, os, sys
 
 TOKEN = os.getenv("TOKEN")
 LTA_Account_Key = os.getenv("LTA_Account_Key")
@@ -49,6 +49,8 @@ def send_bus_timings(updates):
         except KeyError:
             busStopCode = update["edited_message"]["text"]
             chat_id = update["edited_message"]["chat"]["id"]
+
+        print("Request from: "+update["message"]["chat"]+", "+busStopCode)
 
         busStopName = check_valid_bus_stop(busStopCode)
         if busStopName == False:
@@ -111,6 +113,7 @@ def main():
         if len(updates["result"]) > 0:
             last_update_id = get_last_update_id(updates) + 1
             send_bus_timings(updates)
+        sys.stdout.flush()
         time.sleep(0.5)
 
 if __name__ == '__main__':
