@@ -33,7 +33,6 @@ def get_last_update_id(updates):
 def check_valid_bus_stop(message):
     #Converts message to a processable form
     message = "".join([x for x in message if x.isalnum()]).lower()
-    print(message)
     #Loads bus stop database from busStop.txt
     with open("busStop.txt", "rb") as afile:
         busStopDB = pickle.load(afile)
@@ -44,13 +43,16 @@ def check_valid_bus_stop(message):
         busStopName = "".join([y for y in sublist[1] if y.isalnum()]).lower()
         #Check for bus stop number or stop name
         if (message in sublist) or (message == busStopName):
-            return sublist[1] #Return bus stop number
+            return (sublist[0], sublist[1]) #Return bus stop details - bus stop code, bus stop name
             flag = 1
             break
 
     #If none, return False
     if flag!=1:
-        return False
+        return (False, False)
+
+def get_time(x, NextBus):
+    return datetime.datetime.strptime(pjson["Services"][x][NextBus]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
 
 def send_bus_timings(updates):
     #Replies user based on updates received
@@ -67,46 +69,49 @@ def send_bus_timings(updates):
             message = update["edited_message"]["text"]
             chat_id = update["edited_message"]["chat"]["id"]
 
-        #Output to system logs
-        print("Request from: "+str(update["message"]["chat"])+", "+message)
+        print("Request from: "+str(update["message"]["chat"])+", "+message)   #Output to system logs
 
-        busStop = check_valid_bus_stop(message)
-        if busStop == False:
-            telegramReturn = telegramCommands.check_commands(message)
-            if telegramReturn == False:
+        busStopCode, busStopName = check_valid_bus_stop(message)
+        if busStopCode == False:
+            #If it is not a valid bus stop, check if it is a command for the bot, if not return error
+            text = telegramCommands.check_commands(message)
+            if text == False:
                 text = "Please enter a valid bus stop code"
-            else:
-                text = telegramReturn
+
         else:
-            text += "*" + message + " - " + busStop + "*\n"
+            text += busStopCode + " - " + busStopName
+
+            #HTTP Request to check bus timings
             url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
-            url += message
+            url += busStopCode
             request = urllib.request.Request(url)
             request.add_header('AccountKey', LTA_Account_Key)
             response = urllib.request.urlopen(request)
             pjson = json.loads(response.read().decode("utf-8"))
             x = 0
 
+            #For each bus service that is returned
             for service in pjson["Services"]:
-                nextBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+                nextBusTime = get_time(x, "NextBus") #Get next bus timing
                 try:
-                    followingBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+                    followingBusTime = get_time(x, "NextBus2") # Get following bus timing
                 except:
-                    followingBusTime = False
-                currentTime = (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).replace(microsecond=0)
-                if currentTime > nextBusTime:
-                    nextBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+                    followingBusTime = False #If there is no following bus timiing, skip
+                currentTime = (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).replace(microsecond=0) #Get current GMT +8 time
+                if currentTime > nextBusTime: #If API messes up, return next 2 bus timings instead
+                    nextBusTime = get_time(x, "NextBus2")
                     try:
-                        followingBusTime = datetime.datetime.strptime(pjson["Services"][x]["NextBus3"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+                        followingBusTime = get_time(x, "NextBus3")
                     except:
                         followingBusTime = False
-                timeLeft = str((nextBusTime - currentTime)).split(":")[1]
+                timeLeft = str((nextBusTime - currentTime)).split(":")[1] #Return time next for next bus
 
-                if followingBusTime == False:
+                if followingBusTime == False: #If there is no bus arriving, display NA
                     timeFollowingLeft = "NA"
                 else:
-                    timeFollowingLeft = str((followingBusTime - currentTime)).split(":")[1]
+                    timeFollowingLeft = str((followingBusTime - currentTime)).split(":")[1] #Else, return time left for following bus
 
+                #Display time left for each service
                 text += service["ServiceNo"]+"    "
                 if (timeLeft == "00"):
                     text += "Arr"
