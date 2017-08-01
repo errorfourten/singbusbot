@@ -51,7 +51,7 @@ def check_valid_bus_stop(message):
     if flag!=1:
         return (False, False)
 
-def get_time(x, NextBus):
+def get_time(pjson, x, NextBus):
     return datetime.datetime.strptime(pjson["Services"][x][NextBus]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
 
 def send_bus_timings(updates):
@@ -92,16 +92,16 @@ def send_bus_timings(updates):
 
             #For each bus service that is returned
             for service in pjson["Services"]:
-                nextBusTime = get_time(x, "NextBus") #Get next bus timing
+                nextBusTime = get_time(pjson, x, "NextBus") #Get next bus timing
                 try:
-                    followingBusTime = get_time(x, "NextBus2") # Get following bus timing
+                    followingBusTime = get_time(pjson, x, "NextBus2") # Get following bus timing
                 except:
                     followingBusTime = False #If there is no following bus timiing, skip
                 currentTime = (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).replace(microsecond=0) #Get current GMT +8 time
                 if currentTime > nextBusTime: #If API messes up, return next 2 bus timings instead
-                    nextBusTime = get_time(x, "NextBus2")
+                    nextBusTime = get_time(pjson, x, "NextBus2")
                     try:
-                        followingBusTime = get_time(x, "NextBus3")
+                        followingBusTime = get_time(pjson, x, "NextBus3")
                     except:
                         followingBusTime = False
                 timeLeft = str((nextBusTime - currentTime)).split(":")[1] #Return time next for next bus
