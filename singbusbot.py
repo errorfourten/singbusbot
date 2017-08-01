@@ -5,10 +5,13 @@ TOKEN = os.getenv("TOKEN")
 LTA_Account_Key = os.getenv("LTA_Account_Key")
 URL = "https://api.telegram.org/bot{}/".format(TOKEN)
 
-def get_json(url):
-    #Standard HTTP request
+def get_url(url):
     response = requests.get(url)
     content = response.content.decode("utf8")
+    return content
+
+def get_json(url):
+    content = get_url(url)
     js = json.loads(content)
     return js
 
