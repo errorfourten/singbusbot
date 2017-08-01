@@ -1,23 +1,26 @@
 import json, requests, time, urllib, datetime, updateBusData, pickle, os, sys, telegramCommands
 
+#Initialise private variables, TOKEN is API key for Telegram, LTA_Account_Key is for LTA API Key
 TOKEN = os.getenv("TOKEN")
 LTA_Account_Key = os.getenv("LTA_Account_Key")
 URL = "https://api.telegram.org/bot{}/".format(TOKEN)
 
-def get_url(url):
+def get_json(url):
+    #Standard HTTP request
     response = requests.get(url)
     content = response.content.decode("utf8")
-    return content
-
-def get_json(url):
-    content = get_url(url)
     js = json.loads(content)
     return js
 
 def get_updates(offset=None):
+    #Get new messages from the Telegram API
     url = URL + "getUpdates"
+
+    #offset is to clear any existing messages by passing the last update id received
     if offset:
         url += "?offset={}".format(offset)
+
+    #Get update using URL
     js = get_json(url)
     return js
 
@@ -27,42 +30,57 @@ def get_last_update_id(updates):
         update_ids.append(int(update["update_id"]))
     return max(update_ids)
 
-def check_valid_bus_stop(busStopCode):
+def check_valid_bus_stop(message):
+    #Converts message to a processable form
+    message = "".join([x for x in message if x.isalnum()]).lower()
+    print(message)
+    #Loads bus stop database from busStop.txt
     with open("busStop.txt", "rb") as afile:
-        busStop = pickle.load(afile)
+        busStopDB = pickle.load(afile)
     flag=0
-    for sublist in busStop:
-        if busStopCode in sublist:
-            return sublist[1]
+
+    #For each bus stop in the database, check if passed message is found
+    for sublist in busStopDB:
+        busStopName = "".join([y for y in sublist[1] if y.isalnum()]).lower()
+        #Check for bus stop number or stop name
+        if (message in sublist) or (message == busStopName):
+            return sublist[1] #Return bus stop number
             flag = 1
             break
+
+    #If none, return False
     if flag!=1:
         return False
 
 def send_bus_timings(updates):
-    #Check myDatamall
+    #Replies user based on updates received
     text = ""
+
     for update in updates["result"]:
+        #Try to obtain the message & chat_id from the update
+
         try:
-            busStopCode = update["message"]["text"]
+            message = update["message"]["text"]
             chat_id = update["message"]["chat"]["id"]
+        #If message was updated after it was sent, exception catches it as message will be edited_message instead
         except KeyError:
-            busStopCode = update["edited_message"]["text"]
+            message = update["edited_message"]["text"]
             chat_id = update["edited_message"]["chat"]["id"]
 
-        print("Request from: "+str(update["message"]["chat"])+", "+busStopCode)
+        #Output to system logs
+        print("Request from: "+str(update["message"]["chat"])+", "+message)
 
-        busStopName = check_valid_bus_stop(busStopCode)
-        if busStopName == False:
-            telegramReturn = telegramCommands.check_commands(busStopCode)
+        busStop = check_valid_bus_stop(message)
+        if busStop == False:
+            telegramReturn = telegramCommands.check_commands(message)
             if telegramReturn == False:
                 text = "Please enter a valid bus stop code"
             else:
                 text = telegramReturn
         else:
-            text += "*" + busStopCode + " - " + busStopName + "*\n"
+            text += "*" + message + " - " + busStop + "*\n"
             url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
-            url += busStopCode
+            url += message
             request = urllib.request.Request(url)
             request.add_header('AccountKey', LTA_Account_Key)
             response = urllib.request.urlopen(request)
@@ -120,12 +138,18 @@ def send_message(text, chat_id):
 def main():
     last_update_id = None
     while True:
+        #Update bus stop database every day at 12am
         if datetime.datetime.now().hour == 0:
             updateBusData.main()
 
+        #Check for an update from Telegram every loop
         updates = get_updates(last_update_id)
+
+        #If there is an update...
         if len(updates["result"]) > 0:
+            #Update last_update_id to ensure the message is not processed again
             last_update_id = get_last_update_id(updates) + 1
+            #Reply appropriately
             send_bus_timings(updates)
         sys.stdout.flush()
         time.sleep(0.5)
