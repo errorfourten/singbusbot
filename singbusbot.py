@@ -29,6 +29,7 @@ def get_updates(offset=None):
     return js
 
 def send_message_to_owner(text):
+    #Specific send message function which sends it to owner_id
     text = urllib.parse.quote_plus(text)
     url = URL + "sendMessage?text={}&chat_id={}&parse_mode=Markdown".format(text, owner_id)
     get_url(url)
@@ -75,8 +76,12 @@ def send_bus_timings(updates):
             chat_id = update["message"]["chat"]["id"]
         #If message was updated after it was sent, exception catches it as message will be edited_message instead
         except KeyError:
-            message = update["edited_message"]["text"]
-            chat_id = update["edited_message"]["chat"]["id"]
+            try:
+                message = update["edited_message"]["text"]
+                chat_id = update["edited_message"]["chat"]["id"]
+            except KeyError:
+                message = ""
+                chat_id = update["message"]["chat"]["id"]
 
         print("Request from: "+str(update["message"]["chat"])+", "+message)   #Output to system logs
 
