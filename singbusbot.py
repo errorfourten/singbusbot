@@ -3,6 +3,7 @@ import json, requests, time, urllib, datetime, updateBusData, pickle, os, sys, t
 #Initialise private variables, TOKEN is API key for Telegram, LTA_Account_Key is for LTA API Key
 TOKEN = os.getenv("TOKEN")
 LTA_Account_Key = os.getenv("LTA_Account_Key")
+owner_id = os.getenv("owner_id")
 URL = "https://api.telegram.org/bot{}/".format(TOKEN)
 
 def get_url(url):
@@ -26,6 +27,11 @@ def get_updates(offset=None):
     #Get update using URL
     js = get_json(url)
     return js
+
+def send_message_to_owner(text):
+    text = urllib.parse.quote_plus(text)
+    url = URL + "sendMessage?text={}&chat_id={}&parse_mode=Markdown".format(text, owner_id)
+    get_url(url)
 
 def get_last_update_id(updates):
     update_ids = []

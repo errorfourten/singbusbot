@@ -1,3 +1,5 @@
+from singbusbot import send_message_to_owner, get_url
+
 def check_commands(message):
     message = message.split(" ")
     if message[0] == "/help":
@@ -7,7 +9,7 @@ def check_commands(message):
     elif message[0] == "/start":
         return "Welcome to Singapore Bus Bot! Just enter a bus stop code and find the next bus. For example, try entering 53009 or Bishan Int. /help for more information"
     elif message[0] == "/feedback":
-        print(" ".join(message[1:]))
+        send_message_to_owner(" ".join(message[1:]))
         return "Thank you for your feedback! \"{}\"".format(" ".join(message[1:]))
     else:
         return False
