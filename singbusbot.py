@@ -82,7 +82,7 @@ def send_bus_timings(updates):
                 text = "Please enter a valid bus stop code"
 
         else:
-            text += busStopCode + " - " + busStopName + "\n"
+            text += "*{} - {}*\n".format(busStopCode,busStopName)
 
             #HTTP Request to check bus timings
             url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
