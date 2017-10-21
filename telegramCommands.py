@@ -3,7 +3,7 @@ from singbusbot import send_message_to_owner, get_url
 def check_commands(message):
     message = message.split(" ")
     if message[0] == "/help":
-        return "*Help Menu*\n/help - For a list of commands\n/about - About page"
+        return "*Help Menu*\n/help - For a list of commands\n/about - About page\n/feedback - Send feedback straight to the developer by using this format - /feedback [text]"
     elif message[0] == "/about":
         return "*About Page*\nThank you for using SingBusBot. \nPlease do check out the code at https://github.com/errorfourten/singbusbot and new ideas are always welcome."
     elif message[0] == "/start":

@@ -1,15 +1,15 @@
-import json, requests, urllib, pickle, os
+import json, requests, urllib, pickle, os, sqlite3
 
 #LTA API key needed to access the bus stop data from myTransport Datamall
-LTA_Account_Key = os.getenv("LTA_Account_Key")
+LTA_Account_Key = "VtnRuFd7QgWLWklcMg1rRA=="
 
 def updateBusStop():
     toAdd = []
 
     #Set arbitary range to access all bus stops as API only passes a max of 50 bus stops per call
-    for i in range(0, 101):
+    for i in range(0, 9):
         url = "http://datamall2.mytransport.sg/ltaodataservice/BusStops?$skip="
-        url += str(i*50)
+        url += str(i*500)
 
         #HTTP request
         request = urllib.request.Request(url)
@@ -26,5 +26,10 @@ def updateBusStop():
     with open("busStop.txt", "wb") as outfile:
         pickle.dump(toAdd, outfile)
 
+
+
 def main():
-    updateBusStop()
+    #updateBusStop()
+    updateBusService()
+
+main()
