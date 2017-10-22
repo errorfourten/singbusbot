@@ -1,4 +1,4 @@
-import json, requests, time, urllib, datetime, updateBusData, pickle, os, sys, telegramCommands
+import json, requests, time, urllib, datetime, updateBusData, pickle, os, sys, telegramCommands, sqlite3
 
 #Initialise private variables, TOKEN is API key for Telegram, LTA_Account_Key is for LTA API Key
 TOKEN = os.getenv("TOKEN")
@@ -155,6 +155,7 @@ def send_message(text, chat_id):
     get_url(url)
 
 def main():
+    updateBusData.main()
     last_update_id = None
     while True:
         #Update bus stop database every day at 12am
