@@ -85,7 +85,6 @@ def send_bus_timings(updates):
             except KeyError:
                 message = ""
                 chat_id = update["message"]["chat"]["id"]
-        print(update)
         print("Request from: "+str(update["message"]["chat"])+", "+message)   #Output to system logs
 
         busStopCode, busStopName = check_valid_bus_stop(message)
