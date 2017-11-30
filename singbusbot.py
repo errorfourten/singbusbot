@@ -13,11 +13,8 @@ def get_url(url):
 
 def get_json(url):
     content = get_url(url)
-    if content == None:
-        return None
-    else:
-        js = json.loads(content)
-        return js
+    js = json.loads(content)
+    return js
 
 def get_updates(offset=None):
     #Get new messages from the Telegram API
