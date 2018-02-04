@@ -31,10 +31,10 @@ def unknown(bot, update):
     logging.info("Invalid command: %s [%s] (%s)", update.message.from_user.first_name, update.message.from_user.username, update.message.chat_id)
 
 def error_callback(bot, update, error):
-    try:
-        raise
-    except TimedOut:
+    if TimedOut:
         return
+    else:
+        logging.warning('Update "%s" caused error "%s"', update, error)
 
 def send_message_to_owner(bot, update):
     bot.send_message(chat_id=owner_id, text=update)
