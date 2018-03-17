@@ -228,7 +228,7 @@ def fetch_user_data(update):
     if row == []:
         sf = []
     else:
-        sf = json.loads(row[0][2])
+        sf = json.loads(row[0][3])
     return sf
 
 #Settings menu
