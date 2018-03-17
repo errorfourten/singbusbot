@@ -1,7 +1,8 @@
-import telegram, json, requests, time, urllib, datetime, updateBusData, pickle, os, sys, telegramCommands, logging
-from telegram import InlineQueryResultArticle, InputTextMessageContent, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, InlineQueryHandler, CallbackQueryHandler
-from telegram.error import TelegramError, Unauthorized, BadRequest, TimedOut, ChatMigrated, NetworkError
+import telegram, json, requests, time, urllib, datetime, updateBusData, pickle, os, sys, telegramCommands, logging, psycopg2
+from telegram import *
+from telegram.ext import *
+from telegram.error import *
+from urllib import parse
 
 #Initialise private variables. Configured through environmental variables
 TOKEN = os.getenv("TOKEN")
@@ -9,11 +10,29 @@ LTA_Account_Key = os.getenv("LTA_Account_Key")
 owner_id = os.getenv("owner_id")
 URL = "https://api.telegram.org/bot{}/".format(TOKEN)
 
+#Connect to Postgres Database in Heroku
+parse.uses_netloc.append("postgres")
+url = parse.urlparse(os.environ["DATABASE_URL"])
+
+conn = psycopg2.connect(
+    database=url.path[1:],
+    user=url.username,
+    password=url.password,
+    host=url.hostname,
+    port=url.port
+)
+cur = conn.cursor()
+
+#Creates a table in the database if it does not exist
+cur.execute("CREATE TABLE IF NOT EXISTS user_data(user_id TEXT, username TEXT, first_name TEXT, favourite TEXT, state int, PRIMARY KEY (user_id));")
+conn.commit()
+
 #Start telegram wrapper & initate logging module
 updater = Updater(token=TOKEN)
 job = updater.job_queue
 dispatcher = updater.dispatcher
 
+#Adds a Filter to filter out the telegram TimedOut Errors
 class TimedOutFilter(logging.Filter):
     def filter(self, record):
         if "Error while getting Updates: Timed out" in record.getMessage():
@@ -22,13 +41,21 @@ class TimedOutFilter(logging.Filter):
 #Handles /start commands
 def commands(bot, update):
     text = telegramCommands.check_commands(bot, update, update.message.text)
-    logging.info("Command: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.chat_id, update.message.text)
-    bot.send_message(chat_id=update.message.chat_id, text=text, parse_mode="HTML")
+    if update.message.text == '/start':
+        #Adds a new row of data for new users
+        cur.execute('''INSERT INTO user_data (user_id, username, first_name, favourite, state) VALUES ('%s', %s, %s, %s, 1) ON CONFLICT (user_id) DO NOTHING''', (update.message.from_user.id, update.message.from_user.username, update.message.from_user.first_name, '[]'))
+        conn.commit()
+    if text == False:
+        logging.info("Invalid Command: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, update.message.text)
+        bot.send_message(chat_id=update.message.chat_id, text="Please enter a valid command", parse_mode="HTML")
+    else:
+        logging.info("Command: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, update.message.text)
+        bot.send_message(chat_id=update.message.chat_id, text=text, parse_mode="HTML")
 
 #Handles invalid commands & logs request
 def unknown(bot, update):
     bot.send_message(chat_id=update.message.chat_id, text="Please enter a valid command")
-    logging.info("Invalid command: %s [%s] (%s)", update.message.from_user.first_name, update.message.from_user.username, update.message.chat_id)
+    logging.info("Invalid command: %s [%s] (%s)", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id)
 
 def error_callback(bot, update, error):
     if TimedOut:
@@ -40,6 +67,8 @@ def send_message_to_owner(bot, update):
     bot.send_message(chat_id=owner_id, text=update)
 
 def check_valid_bus_stop(message):
+    if message == False:
+        return (False, False)
     #Converts message to a processable form
     message = "".join([x for x in message if x.isalnum()]).lower()
     #Loads bus stop database from busStop.txt
@@ -63,6 +92,21 @@ def check_valid_bus_stop(message):
 def get_time(pjson, x, NextBus):
     return datetime.datetime.strptime(pjson["Services"][x][NextBus]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
 
+def check_valid_favourite(update):
+    user = update.message.chat.id
+    message = update.message.text
+    cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id,))
+    row = cur.fetchall()
+    if row == []:
+        sf = []
+    else:
+        sf = json.loads(row[0][3])
+    for x in sf:
+    	isit = message in x[0]
+    	if isit == True:
+    		return x[1]
+    return message
+
 def send_bus_timings(bot, update, isCallback=False):
     #Replies user based on updates received
     text = ""
@@ -72,7 +116,8 @@ def send_bus_timings(bot, update, isCallback=False):
         CallbackQuery = update.callback_query
         message = CallbackQuery.message.text.split()[0]
     else:
-        message = update.message.text
+        #Check if it exists in user's favourites
+        message = check_valid_favourite(update)
 
     #Call function and assign to variables
     busStopCode, busStopName = check_valid_bus_stop(message)
@@ -80,7 +125,7 @@ def send_bus_timings(bot, update, isCallback=False):
     if busStopCode == False:
         #Informs the user that busStopCode was invalid & logs it
         bot.send_message(chat_id=update.message.chat_id, text="Please enter a valid bus stop code", parse_mode="Markdown")
-        logging.info("Invalid request: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.chat_id, message)
+        logging.info("Invalid request: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, message)
         return
 
     else:
@@ -143,13 +188,13 @@ def send_bus_timings(bot, update, isCallback=False):
     if isCallback == True:
         #Reply to the user and log it
         text += "\n_Last Refreshed: " + (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).strftime('%H:%M:%S') + "_"
-        logging.info("Refresh: %s [%s] (%s), %s", CallbackQuery.from_user.first_name, CallbackQuery.from_user.username, CallbackQuery.message.chat_id, message)
+        logging.info("Refresh: %s [%s] (%s), %s", CallbackQuery.from_user.first_name, CallbackQuery.from_user.username, CallbackQuery.from_user.id, message)
         bot.editMessageText(chat_id=CallbackQuery.message.chat_id, message_id=CallbackQuery.message.message_id, text=text, parse_mode="Markdown", reply_markup=reply_markup)
         bot.answerCallbackQuery(callback_query_id=CallbackQuery.id)
 
     #Else, send a new message
     else:
-        logging.info("Request: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.chat_id, message)
+        logging.info("Request: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, message)
         bot.send_message(chat_id=update.message.chat_id, text=text, parse_mode="Markdown", reply_markup=reply_markup)
 
 def refresh_timings(bot, update):
@@ -158,6 +203,145 @@ def refresh_timings(bot, update):
 def update_bus_data(bot, update):
     updateBusData.main()
     logging.info("Updated Bus Data")
+
+#Initialise some variables for the ConversationHandler function
+ADD, NAME, POSITION, CONFIRM, REMOVE, REMOVECONFIRM = range(6)
+
+def generate_reply_keyboard(sf):
+    i=1
+    temp=[]
+    reply_keyboard=[]
+    for x in sf:
+        temp.append(x[0])
+        if i%2==0:
+        	reply_keyboard.append(temp)
+        	temp=[]
+        if (i%2==1 and i == len(sf)):
+            reply_keyboard.append(temp)
+        i+=1
+    return reply_keyboard
+
+def fetch_user_data(update):
+    cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id, ))
+    conn.commit()
+    row = cur.fetchall()
+    if row == []:
+        sf = []
+    else:
+        sf = json.loads(row[0][2])
+    return sf
+
+#Settings menu
+def settings(bot, update, user_data):
+    logging.info("Accessing settings: %s [%s] (%s)", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id)
+    sf = fetch_user_data(update)
+
+    #If user has no favourites, no remove option will be given
+    if sf == []:
+        reply_keyboard = [["Add Favourite"]]
+    else:
+        reply_keyboard = [["Add Favourite", "Remove Favourite"]]
+    update.message.reply_text(
+        "What would you like to do?\n"
+        "Send /cancel to stop this at any time", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+    return ADD
+
+def add_favourite(bot, update, user_data):
+    user_data.clear()
+    update.message.reply_text("Please enter a bus stop code")
+    return NAME
+
+def choose_name(bot, update, user_data):
+    message = update.message.text
+    busStopCode, busStopName = check_valid_bus_stop(message)
+
+    if busStopCode == False:
+        #Informs the user that busStopCode was invalid & logs it
+        update.message.reply_text("Try again. Please enter a valid bus stop code")
+        return ADD
+
+    else:
+        user_data["busStopCode"] = busStopCode
+        update.message.reply_text("What would you like to name: {} - {}?".format(busStopCode, busStopName))
+        return POSITION
+
+#Asks user to confirm favourite
+def to_confirm(bot, update, user_data):
+    user_data["name"] = update.message.text
+    reply_keyboard = [["Yes", "No"]]
+    update.message.reply_text("Please confirm that you would like to add {} - {}".format(user_data["name"], user_data["busStopCode"]), reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
+    return CONFIRM
+
+#Adds favourite into database
+def confirm_favourite(bot, update, user_data):
+
+    #Fetches data from database
+    sf = fetch_user_data(update)
+    user_data["sf"] = sf
+
+    #Adds new favourite to the list
+    sf.append([user_data["name"], user_data["busStopCode"]])
+    insert_sf = json.dumps(sf)
+    cur.execute('''INSERT INTO user_data (user_id, username, first_name, favourite, state) VALUES ('%s', %s, %s, %s, 1) ON CONFLICT (user_id) DO UPDATE SET favourite = %s; ''', (update.message.from_user.id, update.message.from_user.username, update.message.from_user.first_name, insert_sf, insert_sf))
+    conn.commit()
+
+    reply_keyboard = generate_reply_keyboard(sf)
+
+    logging.info("Added New Favourite: %s [%s] (%s)", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id)
+    update.message.reply_text("Added!", reply_markup=ReplyKeyboardMarkup(reply_keyboard))
+    user_data.clear()
+    return ConversationHandler.END
+
+def remove_favourite(bot, update, user_data):
+    user_data.clear()
+
+    #Gets data from database
+    sf = fetch_user_data(update)
+    user_data["sf"] = sf
+
+    reply_keyboard = generate_reply_keyboard(sf)
+
+    update.message.reply_text("What bus stop would you like to remove?", reply_markup=ReplyKeyboardMarkup(reply_keyboard))
+    return REMOVE
+
+#Asks user to confirm removing bus stop
+def to_remove(bot, update, user_data):
+    sf = user_data["sf"]
+    for x in sf:
+        if update.message.text in x:
+            index = sf.index(x)
+    to_remove = sf[index]
+    user_data["remove"] = to_remove
+
+    reply_keyboard = [["Yes", "No"]]
+    update.message.reply_text("Are you sure you want to remove {} - {}?".format(to_remove[0], to_remove[1]), reply_markup=ReplyKeyboardMarkup(reply_keyboard), one_time_keyboard=True)
+    return REMOVECONFIRM
+
+def confirm_remove(bot, update, user_data):
+    #Inserts the new list into the database
+    user_data["sf"].remove(user_data["remove"])
+    sf = user_data["sf"]
+    insert_sf = json.dumps(sf)
+    cur.execute('''UPDATE user_data SET favourite = %s WHERE user_id = '%s' ''', (insert_sf, update.message.from_user.id))
+    conn.commit()
+
+    reply_keyboard = generate_reply_keyboard(sf)
+
+    logging.info("Removed favourite: %s [%s] (%s)", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id)
+    update.message.reply_text("Removed!", reply_markup=ReplyKeyboardMarkup(reply_keyboard))
+    return ConversationHandler.END
+
+#Allows user to quit at anytime
+def cancel(bot, update, user_data):
+    #Generates reply_keyboard
+    sf = fetch_user_data(update)
+
+    reply_keyboard = generate_reply_keyboard(sf)
+
+    update.message.reply_text("Ended", reply_markup=ReplyKeyboardMarkup(reply_keyboard))
+    user_data.clear()
+    return ConversationHandler.END
 
 def main():
     telegram_logger = logging.getLogger('telegram.ext.updater')
@@ -168,8 +352,25 @@ def main():
     refresh_handler = CallbackQueryHandler(refresh_timings)
     bus_handler = MessageHandler(Filters.text, send_bus_timings)
     unknown_handler = MessageHandler(Filters.all, unknown)
+    settings_handler = ConversationHandler(
+        entry_points=[CommandHandler('settings', settings, pass_user_data=True)],
 
-    job.run_daily(update_bus_data, datetime.time(3))
+        states={
+            ADD: [RegexHandler("^Add Favourite$", add_favourite, pass_user_data=True), RegexHandler("^Remove Favourite$", remove_favourite, pass_user_data=True)],
+            NAME: [MessageHandler(Filters.text, choose_name, pass_user_data=True)],
+            POSITION: [MessageHandler(Filters.text, to_confirm, pass_user_data=True)],
+            CONFIRM: [RegexHandler("Yes", confirm_favourite, pass_user_data=True), RegexHandler("No", add_favourite, pass_user_data=True)],
+            REMOVE: [MessageHandler(Filters.text, to_remove, pass_user_data=True)],
+            REMOVECONFIRM: [RegexHandler("Yes", confirm_remove, pass_user_data=True), RegexHandler("No", cancel, pass_user_data=True)]
+        },
+
+        fallbacks=[CommandHandler("cancel",cancel, pass_user_data=True)],
+        allow_reentry = True,
+        conversation_timeout = 30
+    )
+
+    job.run_daily(update_bus_data, datetime.time(19))
+    dispatcher.add_handler(settings_handler)
     dispatcher.add_handler(command_handler)
     dispatcher.add_handler(refresh_handler)
     dispatcher.add_handler(bus_handler)
