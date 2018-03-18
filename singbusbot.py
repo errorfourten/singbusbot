@@ -366,7 +366,7 @@ def main():
 
         fallbacks=[CommandHandler("cancel",cancel, pass_user_data=True)],
         allow_reentry = True,
-        conversation_timeout = 30
+        conversation_timeout = 60
     )
 
     job.run_daily(update_bus_data, datetime.time(19))
