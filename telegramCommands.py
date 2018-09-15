@@ -18,5 +18,12 @@ def check_commands(bot, update, message):
             else:
                 send_message_to_owner(bot, " ".join(message[1:]))
                 return "Thank you for your feedback! \"{}\"".format(" ".join(message[1:]))
+    elif message[0] == "/broadcast":
+        if message[1:] == False:
+            return False
+        else:
+            return " ".join(message[1:])
+    elif message[0] == "/stop":
+        return "Thank you for using SingBusBot! Please use /start to restart it anytime."
     else:
         return False

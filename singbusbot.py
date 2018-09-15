@@ -38,17 +38,33 @@ class TimedOutFilter(logging.Filter):
         if "Error while getting Updates: Timed out" in record.getMessage():
             return False
 
-#Handles /start commands
+#Handles any commands
 def commands(bot, update):
     text = telegramCommands.check_commands(bot, update, update.message.text)
-    if update.message.text == '/start':
-        #Adds a new row of data for new users
-        cur.execute('''INSERT INTO user_data (user_id, username, first_name, favourite, state) VALUES ('%s', %s, %s, %s, 1) ON CONFLICT (user_id) DO NOTHING''', (update.message.from_user.id, update.message.from_user.username, update.message.from_user.first_name, '[]'))
-        conn.commit()
-    if text == False:
-        logging.info("Invalid Command: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, update.message.text)
-        bot.send_message(chat_id=update.message.chat_id, text="Please enter a valid command", parse_mode="HTML")
+    if '/broadcast' in update.message.text and update.message.from_user.id == int(owner_id):
+        #Broadcasts messages if user is the owner
+        cur.execute('''SELECT * FROM user_data WHERE state = 1''')
+        row = cur.fetchall()
+        for x in row:
+            chat_id = json.loads(x[0])
+            try: #Try to send a message to the user. If the user has blocked the bot, just skip
+                bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+            except:
+                pass
+        logging.info("Broadcast complete")
     else:
+        if update.message.text == '/start':
+            #Adds a new row of data for new users
+            cur.execute('''INSERT INTO user_data (user_id, username, first_name, favourite, state) VALUES ('%s', %s, %s, %s, 1) ON CONFLICT (user_id) DO UPDATE SET state = 1''', (update.message.from_user.id, update.message.from_user.username, update.message.from_user.first_name, '[]'))
+            conn.commit()
+        elif '/stop' in update.message.text:
+            cur.execute('''UPDATE user_data SET state = 0 WHERE user_id = '%s' ''', (update.message.from_user.id,))
+            conn.commit()
+        elif text == False:
+            logging.info("Invalid Command: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, update.message.text)
+            bot.send_message(chat_id=update.message.chat_id, text="Please enter a valid command", parse_mode="HTML")
+
+        #Logs and sends message
         logging.info("Command: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, update.message.text)
         bot.send_message(chat_id=update.message.chat_id, text=text, parse_mode="HTML")
 
@@ -90,7 +106,10 @@ def check_valid_bus_stop(message):
         return (False, False)
 
 def get_time(pjson, x, NextBus):
-    return datetime.datetime.strptime(pjson["Services"][x][NextBus]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+    if (pjson["Services"][x][NextBus]["EstimatedArrival"].split("+")[0] == ""):
+        return False
+    else:
+        return datetime.datetime.strptime(pjson["Services"][x][NextBus]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
 
 def check_valid_favourite(update):
     user = update.message.chat.id
@@ -129,7 +148,8 @@ def send_bus_timings(bot, update, isCallback=False):
         return
 
     else:
-        text += "*{} - {}*\n".format(busStopCode,busStopName)
+        header = "*{} - {}*\n".format(busStopCode,busStopName)
+        text += header
 
         #HTTP Request to check bus timings
         url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
@@ -143,18 +163,21 @@ def send_bus_timings(bot, update, isCallback=False):
         #For each bus service that is returned
         for service in pjson["Services"]:
             nextBusTime = get_time(pjson, x, "NextBus") #Get next bus timing
-            try:
-                followingBusTime = get_time(pjson, x, "NextBus2") # Get following bus timing
-            except:
-                followingBusTime = False #If there is no following bus timiing, skip
-            currentTime = (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).replace(microsecond=0) #Get current GMT +8 time
-            if currentTime > nextBusTime: #If API messes up, return next 2 bus timings instead
-                nextBusTime = get_time(pjson, x, "NextBus2")
+            if nextBusTime == False: #If there are no buses coming at all, display NA
+                timeLeft = "NA"
+            else:
                 try:
-                    followingBusTime = get_time(pjson, x, "NextBus3")
+                    followingBusTime = get_time(pjson, x, "NextBus2") # Get following bus timing
                 except:
-                    followingBusTime = False
-            timeLeft = str((nextBusTime - currentTime)).split(":")[1] #Return time next for next bus
+                    followingBusTime = False #If there is no following bus timing, skip
+                currentTime = (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).replace(microsecond=0) #Get current GMT +8 time
+                if currentTime > nextBusTime: #If API messes up, return next 2 bus timings instead
+                    nextBusTime = get_time(pjson, x, "NextBus2")
+                    try:
+                        followingBusTime = get_time(pjson, x, "NextBus3")
+                    except:
+                        followingBusTime = False
+                timeLeft = str((nextBusTime - currentTime)).split(":")[1] #Return time next for next bus
 
             if followingBusTime == False: #If there is no bus arriving, display NA
                 timeFollowingLeft = "NA"
@@ -176,6 +199,8 @@ def send_bus_timings(bot, update, isCallback=False):
 
             x+=1
 
+        if (text == header): #If no results were returned
+            text += "No more buses at this hour"
     #Format of inline refresh button
     button_list = [
         [
