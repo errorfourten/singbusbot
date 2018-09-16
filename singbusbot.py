@@ -105,11 +105,31 @@ def check_valid_bus_stop(message):
     if flag!=1:
         return (False, False)
 
-def get_time(pjson, x, NextBus):
-    if (pjson["Services"][x][NextBus]["EstimatedArrival"].split("+")[0] == ""):
-        return False
+def get_time(service): #Pass pjson data to return timeLeft and timeFollowingLeft
+
+    if (service["NextBus"]["EstimatedArrival"].split("+")[0] == ""):
+        return "NA", "NA" #If next bus timing does not exist, return NA
     else:
-        return datetime.datetime.strptime(pjson["Services"][x][NextBus]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+        nextBusTime = datetime.datetime.strptime(service["NextBus"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S") #Get next bus timing
+        try:
+            followingBusTime = datetime.datetime.strptime(service["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+        except:
+            followingBusTime = "NA"
+
+        currentTime = (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).replace(microsecond=0)
+        if currentTime > nextBusTime: #If API messes up, return following bus timing
+            nextBusTime = datetime.datetime.strptime(service["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+            try:
+                followingBusTime = datetime.datetime.strptime(service["NextBus3"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+            except:
+                followingBusTime = "NA"
+
+        timeLeft = str((nextBusTime - currentTime)).split(":")[1] #Return time next for next bus
+        if followingBusTime != "NA":
+            timeFollowingLeft = str((followingBusTime - currentTime)).split(":")[1] #Else, return time left for following bus
+        else:
+            timeFollowingLeft = followingBusTime
+        return timeLeft, timeFollowingLeft
 
 def check_valid_favourite(update):
     user = update.message.chat.id
@@ -158,31 +178,10 @@ def send_bus_timings(bot, update, isCallback=False):
         request.add_header('AccountKey', LTA_Account_Key)
         response = urllib.request.urlopen(request)
         pjson = json.loads(response.read().decode("utf-8"))
-        x = 0
 
         #For each bus service that is returned
         for service in pjson["Services"]:
-            nextBusTime = get_time(pjson, x, "NextBus") #Get next bus timing
-            if nextBusTime == False: #If there are no buses coming at all, display NA
-                timeLeft = "NA"
-            else:
-                try:
-                    followingBusTime = get_time(pjson, x, "NextBus2") # Get following bus timing
-                except:
-                    followingBusTime = False #If there is no following bus timing, skip
-                currentTime = (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).replace(microsecond=0) #Get current GMT +8 time
-                if currentTime > nextBusTime: #If API messes up, return next 2 bus timings instead
-                    nextBusTime = get_time(pjson, x, "NextBus2")
-                    try:
-                        followingBusTime = get_time(pjson, x, "NextBus3")
-                    except:
-                        followingBusTime = False
-                timeLeft = str((nextBusTime - currentTime)).split(":")[1] #Return time next for next bus
-
-            if followingBusTime == False: #If there is no bus arriving, display NA
-                timeFollowingLeft = "NA"
-            else:
-                timeFollowingLeft = str((followingBusTime - currentTime)).split(":")[1] #Else, return time left for following bus
+            timeLeft, timeFollowingLeft = get_time(service)
 
             #Display time left for each service
             text += service["ServiceNo"]+"    "
@@ -197,7 +196,6 @@ def send_bus_timings(bot, update, isCallback=False):
                 text += timeFollowingLeft+" min"
             text += "\n"
 
-            x+=1
 
         if (text == header): #If no results were returned
             text += "No more buses at this hour"
@@ -229,7 +227,93 @@ def update_bus_data(bot, update):
     updateBusData.main()
     logging.info("Updated Bus Data")
 
-#Initialise some variables for the ConversationHandler function
+class FilterBusService(BaseFilter): #Create a new telegram filter, filter out bus Services
+    def filter(self, message):
+        with open("busServiceNo.txt", "rb") as afile:
+            busServiceNo = pickle.load(afile)
+        return message.text in busServiceNo
+
+busService_filter = FilterBusService()
+
+#ConversationHandler for bus services
+
+BUSSERVICE = range(1)
+
+def askBusRoute(bot, update, user_data): #Takes in bus service and outputs direction, waiting for user's confirmation
+    busNumber = update.message.text
+
+    with open("busService.txt", "rb") as afile:
+        busServiceDB = pickle.load(afile)
+
+    out = [element for element in busServiceDB if element['serviceNo'] == busNumber] #Find the direction(s) out that bus service
+    reply_keyboard = []
+    for x in range(len(out)): #Generates a reply_keyboard with the directions
+        busStopCodeStart, busStopNameStart = check_valid_bus_stop(out[x]["BusStopCode"][0])
+        busStopCodeEnd, busStopNameEnd = check_valid_bus_stop(out[x]["BusStopCode"][-1])
+        st = "%s - %s" % (busStopNameStart, busStopNameEnd)
+        text = [st]
+        reply_keyboard.append(text)
+    user_data["busService"] = [busNumber, reply_keyboard] #Pass the generated data to user_data
+    update.message.reply_text("Which direction?", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)) #Asks user for input
+    logging.info("Service Request: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, busNumber)
+
+    return BUSSERVICE
+
+def sendTyping(bot, job):
+    bot.send_chat_action(chat_id=job.context, action="typing", timeout=30)
+
+def findBusRoute(bot, update, user_data): #Once user has replied with direction, output the arrival timings
+    job_sendTyping = job.run_repeating(sendTyping, interval = 5, first=0, context=update.message.from_user.id)
+    reply = update.message.text
+
+    #Create the usual reply_keyboard
+    sf = fetch_user_data(update)
+    reply_keyboard = generate_reply_keyboard(sf)
+
+    if [reply] in user_data["busService"][1]: #Ensures that the user reply is a valid one
+        direction = user_data["busService"][1].index([reply]) #Gets the direction in terms of a int
+        busNumber = user_data["busService"][0]
+
+        with open("busService.txt", "rb") as afile:
+            busServiceDB = pickle.load(afile)
+
+        out = [element for element in busServiceDB if element['serviceNo'] == busNumber] #Gets all directions of bus service
+        header = "Bus %s (%s)\n" % (str(busNumber), reply)
+        message = "<i>%s</i>" % header
+
+        for busStopCode in out[direction]["BusStopCode"]: #For every bus stop code in that direction
+            url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
+            url += busStopCode
+            request = urllib.request.Request(url)
+            request.add_header('AccountKey', LTA_Account_Key)
+            response = urllib.request.urlopen(request)
+            pjson = json.loads(response.read().decode("utf-8")) #Get the raw data from LTA
+
+            service = [element for element in pjson["Services"] if element['ServiceNo'] == busNumber] #Select the correct bus service from raw data
+            if service == []: #If there are no more buses for the day
+                message += "No more buses at this hour"
+                break
+            else: #Else, return the timings
+                timeLeft, timeFollowingLeft = get_time(service[0]) #and gets the arrival time
+                busStopCode, busStopName = check_valid_bus_stop(busStopCode)
+                text = "<b>" + busStopName + "</b>   "
+                if timeLeft == "00":
+                    text += "Arr"
+                else:
+                    text += timeLeft + " min"
+                message += text + "\n"
+            logging.info(timeLeft)
+        job_sendTyping.schedule_removal()
+        update.message.reply_text(message, reply_markup=ReplyKeyboardMarkup(reply_keyboard), parse_mode="HTML")
+        logging.info("Service Request: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, header)
+    else:
+        job_sendTyping.schedule_removal()
+        update.message.reply_text("Invalid direction", reply_markup=ReplyKeyboardMarkup(reply_keyboard), parse_mode="HTML")
+        logging.info("Invalid direction: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, reply)
+    user_data.clear()
+    return ConversationHandler.END
+
+#Initialise some variables for the service ConversationHandler function
 ADD, NAME, POSITION, CONFIRM, REMOVE, REMOVECONFIRM = range(6)
 
 def generate_reply_keyboard(sf):
@@ -377,6 +461,18 @@ def main():
     refresh_handler = CallbackQueryHandler(refresh_timings)
     bus_handler = MessageHandler(Filters.text, send_bus_timings)
     unknown_handler = MessageHandler(Filters.all, unknown)
+
+    busService_handler = ConversationHandler(
+        entry_points=[MessageHandler(busService_filter, askBusRoute, pass_user_data=True)],
+
+        states={
+            BUSSERVICE: [MessageHandler(Filters.text, findBusRoute, pass_user_data=True)]
+        },
+
+        fallbacks=[CommandHandler("cancel",cancel, pass_user_data=True)],
+        conversation_timeout = 60
+    )
+
     settings_handler = ConversationHandler(
         entry_points=[CommandHandler('settings', settings, pass_user_data=True)],
 
@@ -396,13 +492,14 @@ def main():
 
     job.run_daily(update_bus_data, datetime.time(19))
     dispatcher.add_handler(settings_handler)
-    dispatcher.add_handler(command_handler)
     dispatcher.add_handler(refresh_handler)
+    dispatcher.add_handler(busService_handler)
+    dispatcher.add_handler(command_handler)
     dispatcher.add_handler(bus_handler)
     dispatcher.add_handler(unknown_handler)
     dispatcher.add_error_handler(error_callback)
 
-    updater.start_polling()
+    updater.start_polling(timeout=30)
     updater.idle()
 
 if __name__ == '__main__':
