@@ -1,4 +1,4 @@
-import telegram, json, requests, time, urllib, datetime, updateBusData, pickle, os, sys, telegramCommands, logging, psycopg2
+import telegram, json, requests, time, urllib, datetime, updateBusData, pickle, os, sys, telegramCommands, logging, psycopg2, re
 from telegram import *
 from telegram.ext import *
 from telegram.error import *
@@ -52,21 +52,25 @@ def commands(bot, update):
             except:
                 pass
         logging.info("Broadcast complete")
-    else:
-        if update.message.text == '/start':
-            #Adds a new row of data for new users
-            cur.execute('''INSERT INTO user_data (user_id, username, first_name, favourite, state) VALUES ('%s', %s, %s, %s, 1) ON CONFLICT (user_id) DO UPDATE SET state = 1''', (update.message.from_user.id, update.message.from_user.username, update.message.from_user.first_name, '[]'))
-            conn.commit()
-        elif '/stop' in update.message.text:
-            cur.execute('''UPDATE user_data SET state = 0 WHERE user_id = '%s' ''', (update.message.from_user.id,))
-            conn.commit()
-        elif text == False:
-            logging.info("Invalid Command: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, update.message.text)
-            bot.send_message(chat_id=update.message.chat_id, text="Please enter a valid command", parse_mode="HTML")
+    elif update.message.text == '/start':
+        #Adds a new row of data for new users
+        cur.execute('''INSERT INTO user_data (user_id, username, first_name, favourite, state) VALUES ('%s', %s, %s, %s, 1) ON CONFLICT (user_id) DO UPDATE SET state = 1''', (update.message.from_user.id, update.message.from_user.username, update.message.from_user.first_name, '[]'))
+        conn.commit()
+    elif '/stop' in update.message.text:
+        cur.execute('''UPDATE user_data SET state = 0 WHERE user_id = '%s' ''', (update.message.from_user.id,))
+        conn.commit()
+    elif re.search("/(\d\d\d\d\d)", update.message.text):
+        update.message.text = re.search("/(\d\d\d\d\d)", update.message.text).group(1)
+        send_bus_timings(bot, update)
+        return
+    elif text == False:
+        logging.info("Invalid Command: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, update.message.text)
+        bot.send_message(chat_id=update.message.chat_id, text="Please enter a valid command", parse_mode="HTML")
+        return
 
-        #Logs and sends message
-        logging.info("Command: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, update.message.text)
-        bot.send_message(chat_id=update.message.chat_id, text=text, parse_mode="HTML")
+    #Logs and sends message
+    logging.info("Command: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, update.message.text)
+    bot.send_message(chat_id=update.message.chat_id, text=text, parse_mode="HTML")
 
 #Handles invalid commands & logs request
 def unknown(bot, update):
@@ -118,11 +122,14 @@ def get_time(service): #Pass pjson data to return timeLeft and timeFollowingLeft
 
         currentTime = (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).replace(microsecond=0)
         if currentTime > nextBusTime: #If API messes up, return following bus timing
-            nextBusTime = datetime.datetime.strptime(service["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
             try:
-                followingBusTime = datetime.datetime.strptime(service["NextBus3"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+                nextBusTime = datetime.datetime.strptime(service["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+                try:
+                    followingBusTime = datetime.datetime.strptime(service["NextBus3"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+                except:
+                    followingBusTime = "NA"
             except:
-                followingBusTime = "NA"
+                return "NA", "NA" #If next bus timing does not exist, return NA
 
         timeLeft = str((nextBusTime - currentTime)).split(":")[1] #Return time next for next bus
         if followingBusTime != "NA":
@@ -295,14 +302,16 @@ def findBusRoute(bot, update, user_data): #Once user has replied with direction,
                 break
             else: #Else, return the timings
                 timeLeft, timeFollowingLeft = get_time(service[0]) #and gets the arrival time
-                busStopCode, busStopName = check_valid_bus_stop(busStopCode)
-                text = "<b>" + busStopName + "</b>   "
-                if timeLeft == "00":
-                    text += "Arr"
-                else:
-                    text += timeLeft + " min"
-                message += text + "\n"
-            logging.info(timeLeft)
+            busStopCode, busStopName = check_valid_bus_stop(busStopCode)
+            text = "<b>%s </b>( /%s )   " % (busStopName, busStopCode)
+            if timeLeft == "00":
+                text += "Arr"
+            else:
+                text += timeLeft + " min"
+            message += text + "\n"
+
+        if message == "<i>%s</i>" % header:
+            message += "No more buses at this hour"
         job_sendTyping.schedule_removal()
         update.message.reply_text(message, reply_markup=ReplyKeyboardMarkup(reply_keyboard), parse_mode="HTML")
         logging.info("Service Request: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, header)
