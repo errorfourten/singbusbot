@@ -238,7 +238,7 @@ class FilterBusService(BaseFilter): #Create a new telegram filter, filter out bu
     def filter(self, message):
         with open("busServiceNo.txt", "rb") as afile:
             busServiceNo = pickle.load(afile)
-        return message.text in busServiceNo
+        return message.text.upper() in busServiceNo
 
 busService_filter = FilterBusService()
 
@@ -247,7 +247,7 @@ busService_filter = FilterBusService()
 BUSSERVICE = range(1)
 
 def askBusRoute(bot, update, user_data): #Takes in bus service and outputs direction, waiting for user's confirmation
-    busNumber = update.message.text
+    busNumber = update.message.text.upper()
 
     with open("busService.txt", "rb") as afile:
         busServiceDB = pickle.load(afile)
@@ -285,8 +285,9 @@ def findBusRoute(bot, update, user_data): #Once user has replied with direction,
             busServiceDB = pickle.load(afile)
 
         out = [element for element in busServiceDB if element['serviceNo'] == busNumber] #Gets all directions of bus service
-        header = "Bus %s (%s)\n" % (str(busNumber), reply)
-        message = "<i>%s</i>" % header
+        header = "Bus %s (%s)" % (str(busNumber), reply)
+        message = "<i>%s</i>\n" % header
+        flag = 0
 
         for busStopCode in out[direction]["BusStopCode"]: #For every bus stop code in that direction
             url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
@@ -303,14 +304,16 @@ def findBusRoute(bot, update, user_data): #Once user has replied with direction,
                 timeLeft, timeFollowingLeft = get_time(service[0]) #and gets the arrival time
             busStopCode, busStopName = check_valid_bus_stop(busStopCode)
             text = "<b>%s </b>( /%s )   " % (busStopName, busStopCode)
+            if timeLeft != "NA":
+                flag = 1
             if timeLeft == "00":
                 text += "Arr"
             else:
                 text += timeLeft + " min"
             message += text + "\n"
 
-        if message == "<i>%s</i>" % header:
-            message += "No more buses at this hour"
+        if flag == 0:
+            message = "<i>%s</i>\n" % header + "No more buses at this hour"
         job_sendTyping.schedule_removal()
         update.message.reply_text(message, reply_markup=ReplyKeyboardMarkup(reply_keyboard), parse_mode="HTML")
         logging.info("Service Request: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, header)
