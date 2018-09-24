@@ -167,7 +167,7 @@ def send_bus_timings(bot, update, isCallback=False):
         CallbackQuery = update.callback_query
         try:
             message = CallbackQuery.message.text.split()[0]
-        else:
+        except:
             print(message)
     else:
         #Check if it exists in user's favourites
