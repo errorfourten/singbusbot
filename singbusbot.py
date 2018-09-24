@@ -10,6 +10,16 @@ LTA_Account_Key = os.getenv("LTA_Account_Key")
 owner_id = os.getenv("owner_id")
 URL = "https://api.telegram.org/bot{}/".format(TOKEN)
 
+#Connect to Postgres Database locally
+#conn = psycopg2.connect(
+#    database="user_data",
+#    user="postgres",
+#    password="password",
+#    host="127.0.0.1",
+#    port="5432"
+#)
+#cur = conn.cursor()
+
 #Connect to Postgres Database in Heroku
 parse.uses_netloc.append("postgres")
 url = parse.urlparse(os.environ["DATABASE_URL"])
@@ -121,17 +131,12 @@ def get_time(service): #Pass pjson data to return timeLeft and timeFollowingLeft
             followingBusTime = "NA"
 
         currentTime = (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).replace(microsecond=0)
-        if currentTime > nextBusTime: #If API messes up, return following bus timing
-            try:
-                nextBusTime = datetime.datetime.strptime(service["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
-                try:
-                    followingBusTime = datetime.datetime.strptime(service["NextBus3"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
-                except:
-                    followingBusTime = "NA"
-            except:
-                return "NA", "NA" #If next bus timing does not exist, return NA
 
-        timeLeft = str((nextBusTime - currentTime)).split(":")[1] #Return time next for next bus
+        if currentTime > nextBusTime: #If bus is late...
+            timeLeft = "00"
+        else:
+            timeLeft = str((nextBusTime - currentTime)).split(":")[1] #Return time next for next bus
+
         if followingBusTime != "NA":
             timeFollowingLeft = str((followingBusTime - currentTime)).split(":")[1] #Else, return time left for following bus
         else:
@@ -161,6 +166,7 @@ def send_bus_timings(bot, update, isCallback=False):
     if isCallback == True:
         CallbackQuery = update.callback_query
         message = CallbackQuery.message.text.split()[0]
+        print(message)
     else:
         #Check if it exists in user's favourites
         message = check_valid_favourite(update)
