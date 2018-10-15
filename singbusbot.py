@@ -576,7 +576,7 @@ def main():
     )
 
     job.run_daily(update_bus_data, datetime.time(19))
-    job.run_repeating(serviceUpdate, interval=900, first=0)
+    #job.run_repeating(serviceUpdate, interval=900, first=0)
 
     dispatcher.add_handler(settings_handler)
     dispatcher.add_handler(location_handler)
