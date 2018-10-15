@@ -10,7 +10,6 @@ TOKEN = os.getenv("TOKEN")
 LTA_Account_Key = os.getenv("LTA_Account_Key")
 owner_id = os.getenv("owner_id")
 URL = "https://api.telegram.org/bot{}/".format(TOKEN)
-serviceUpdate = ""
 
 #Connect to Postgres Database locally
 #conn = psycopg2.connect(
@@ -303,8 +302,8 @@ def serviceUpdate(bot, update):
     if (pjson["value"]["Message"] != []):
         if pjson["value"]["Message"][0]["Content"] != serviceUpdate:
             serviceUpdate = pjson["value"]["Message"][0]["Content"]
-            logging.info("Service update: " + text)
-            broacastMessage(text)
+            logging.info("Service update: " + serviceUpdate)
+            broacastMessage(serviceUpdate)
 
 class FilterBusService(BaseFilter): #Create a new telegram filter, filter out bus Services
     def filter(self, message):
@@ -537,6 +536,7 @@ def cancel(bot, update, user_data):
     return ConversationHandler.END
 
 def main():
+    serviceUpdate = ""
     telegram_logger = logging.getLogger('telegram.ext.updater')
     logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
     telegram_logger.addFilter(TimedOutFilter())
