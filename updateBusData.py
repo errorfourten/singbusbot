@@ -41,7 +41,7 @@ def updateBusService():
         url += str(i*500)
 
         request = urllib.request.Request(url)
-        request.add_header('AccountKey', "VtnRuFd7QgWLWklcMg1rRA==")
+        request.add_header('AccountKey', LTA_Account_Key)
         response = urllib.request.urlopen(request)
         pjson = json.loads(response.read().decode("utf-8"))
 
@@ -71,5 +71,3 @@ def updateBusService():
 def main():
     updateBusStop()
     updateBusService()
-
-main()
