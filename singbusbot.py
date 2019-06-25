@@ -151,7 +151,20 @@ def get_time(service): #Pass pjson data to return timeLeft and timeFollowingLeft
 def check_valid_favourite(update):
     user = update.message.chat.id
     message = update.message.text
-    cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id,))
+
+    try:
+        cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id,))
+    except Exception as e:
+        conn = psycopg2.connect(
+            database=url.path[1:],
+            user=url.username,
+            password=url.password,
+            host=url.hostname,
+            port=url.port
+        )
+        cur = conn.cursor()
+        cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id,))
+
     row = cur.fetchall()
     if row == []:
         sf = []
@@ -414,7 +427,19 @@ def generate_reply_keyboard(sf):
     return reply_keyboard
 
 def fetch_user_data(update):
-    cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id, ))
+    try:
+        cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id, ))
+    except Exception as e:
+        conn = psycopg2.connect(
+            database=url.path[1:],
+            user=url.username,
+            password=url.password,
+            host=url.hostname,
+            port=url.port
+        )
+        cur = conn.cursor()
+        cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id, ))
+
     conn.commit()
     row = cur.fetchall()
     if row == []:
