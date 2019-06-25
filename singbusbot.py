@@ -21,6 +21,19 @@ URL = "https://api.telegram.org/bot{}/".format(TOKEN)
 #)
 #cur = conn.cursor()
 
+#Connect to Postgres Database in Heroku
+parse.uses_netloc.append("postgres")
+url = parse.urlparse(os.environ["DATABASE_URL"])
+
+conn = psycopg2.connect(
+    database=url.path[1:],
+    user=url.username,
+    password=url.password,
+    host=url.hostname,
+    port=url.port
+)
+cur = conn.cursor()
+
 #Creates a table in the database if it does not exist
 cur.execute("CREATE TABLE IF NOT EXISTS user_data(user_id TEXT, username TEXT, first_name TEXT, favourite TEXT, state int, PRIMARY KEY (user_id));")
 conn.commit()
@@ -151,6 +164,8 @@ def check_valid_favourite(update):
         )
         cur = conn.cursor()
         cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id,))
+    except Exception as e:
+        print e.message
 
     row = cur.fetchall()
     if row == []:
@@ -548,19 +563,6 @@ def cancel(bot, update, user_data):
     return ConversationHandler.END
 
 def main():
-    #Connect to Postgres Database in Heroku
-    parse.uses_netloc.append("postgres")
-    url = parse.urlparse(os.environ["DATABASE_URL"])
-
-    conn = psycopg2.connect(
-        database=url.path[1:],
-        user=url.username,
-        password=url.password,
-        host=url.hostname,
-        port=url.port
-    )
-    cur = conn.cursor()
-
     serviceUpdate = ""
     telegram_logger = logging.getLogger('telegram.ext.updater')
     logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
