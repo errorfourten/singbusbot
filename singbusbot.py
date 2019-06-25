@@ -165,7 +165,7 @@ def check_valid_favourite(update):
         cur = conn.cursor()
         cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id,))
     except Exception as e:
-        print e.message
+        print (e.message)
 
     row = cur.fetchall()
     if row == []:
