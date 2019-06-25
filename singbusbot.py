@@ -154,7 +154,7 @@ def check_valid_favourite(update):
 
     try:
         cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id,))
-    except psycopg2.InterfaceError as e:
+    except Exception as e:
         conn = psycopg2.connect(
             database=url.path[1:],
             user=url.username,
@@ -164,8 +164,6 @@ def check_valid_favourite(update):
         )
         cur = conn.cursor()
         cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id,))
-    except Exception as e:
-        print (e)
 
     row = cur.fetchall()
     if row == []:
@@ -431,7 +429,7 @@ def generate_reply_keyboard(sf):
 def fetch_user_data(update):
     try:
         cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id, ))
-    except psycopg2.InterfaceError as e:
+    except Exception as e:
         conn = psycopg2.connect(
             database=url.path[1:],
             user=url.username,
