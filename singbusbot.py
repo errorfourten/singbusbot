@@ -1,619 +1,794 @@
-import telegram, json, requests, time, urllib, datetime, updateBusData, pickle, os, sys, telegramCommands, logging, psycopg2, re
+import json
+import requests
+import pickle
+import os
+import logging
+
+import telegram
+import psycopg2
+
+import updateBusData
+import telegramCommands
 from telegram import *
 from telegram.ext import *
-from telegram.error import *
+from telegram.error import TimedOut
 from urllib import parse
 from scipy import spatial
+from datetime import datetime, timedelta, time
 
-#Initialise private variables. Configured through environmental variables
 TOKEN = os.getenv("TOKEN")
-LTA_Account_Key = os.getenv("LTA_Account_Key")
-owner_id = os.getenv("owner_id")
-URL = "https://api.telegram.org/bot{}/".format(TOKEN)
+LTA_ACCOUNT_KEY = os.getenv("LTA_Account_Key")
+OWNER_ID = os.getenv("owner_id")
+BOT_URL = "https://api.telegram.org/bot{}/".format(TOKEN)
 
-#Connect to Postgres Database locally
-#conn = psycopg2.connect(
-#    database="user_data",
-#    user="postgres",
-#    password="password",
-#    host="127.0.0.1",
-#    port="5432"
-#)
-#cur = conn.cursor()
+# Sets the database credentials based on testing vs prod environment
+if os.environ.get("DATABASE_URL"):
+    parse.uses_netloc.append("postgres")
+    db_url = parse.urlparse(os.environ["DATABASE_URL"])
+    DATABASE_CREDENTIALS = f"""dbname='{db_url.path[1:]}'
+                               user='{db_url.username}'
+                               password='{db_url.password}'
+                               host='{db_url.hostname}'
+                               port='{db_url.port}'"""
+else:
+    DATABASE_CREDENTIALS = """dbname='user_data'
+       user='postgres'
+       password='password'
+       host='127.0.0.1'
+       port='5432'"""
 
-#Connect to Postgres Database in Heroku
-parse.uses_netloc.append("postgres")
-url = parse.urlparse(os.environ["DATABASE_URL"])
-
-conn = psycopg2.connect(
-    database=url.path[1:],
-    user=url.username,
-    password=url.password,
-    host=url.hostname,
-    port=url.port
-)
-cur = conn.cursor()
-
-#Creates a table in the database if it does not exist
-cur.execute("CREATE TABLE IF NOT EXISTS user_data(user_id TEXT, username TEXT, first_name TEXT, favourite TEXT, state int, PRIMARY KEY (user_id));")
-conn.commit()
-
-#Start telegram wrapper & initate logging module
-updater = Updater(token=TOKEN)
+updater = Updater(token=TOKEN, use_context=True)
 job = updater.job_queue
 dispatcher = updater.dispatcher
+conn = psycopg2.connect(DATABASE_CREDENTIALS)
 
-#Adds a Filter to filter out the telegram TimedOut Errors
+####################
+# HELPER FUNCTIONS #
+####################
+
+# Adds a Filter to filter out the telegram TimedOut Errors
 class TimedOutFilter(logging.Filter):
     def filter(self, record):
         if "Error while getting Updates: Timed out" in record.getMessage():
             return False
 
-#Handles any commands
-def commands(bot, update):
-    text = telegramCommands.check_commands(bot, update, update.message.text)
-    if '/broadcast' in update.message.text and update.message.from_user.id == int(owner_id):
-        broacastMessage(text)
-    elif update.message.text == '/start':
-        #Adds a new row of data for new users
-        cur.execute('''INSERT INTO user_data (user_id, username, first_name, favourite, state) VALUES ('%s', %s, %s, %s, 1) ON CONFLICT (user_id) DO UPDATE SET state = 1''', (update.message.from_user.id, update.message.from_user.username, update.message.from_user.first_name, '[]'))
-        conn.commit()
-    elif '/stop' in update.message.text:
-        cur.execute('''UPDATE user_data SET state = 0 WHERE user_id = '%s' ''', (update.message.from_user.id,))
-        conn.commit()
-    elif re.search("/(\d\d\d\d\d)", update.message.text):
-        update.message.text = re.search("/(\d\d\d\d\d)", update.message.text).group(1)
-        send_bus_timings(bot, update)
-        return
-    elif text == False:
-        logging.info("Invalid Command: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, update.message.text)
-        bot.send_message(chat_id=update.message.chat_id, text="Please enter a valid command", parse_mode="HTML")
-        return
+def _escape_markdown(message):
+    markdownv2_escape = {
+        "-": "\-",
+        ".": "\.",
+        "(": "\(",
+        ")": "\)",
+    }
+    return message.translate(str.maketrans(markdownv2_escape))
 
-    sf = fetch_user_data(update)
-    reply_keyboard = generate_reply_keyboard(sf)
-    #Logs and sends message
-    logging.info("Command: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, update.message.text)
-    bot.send_message(chat_id=update.message.chat_id, text=text, parse_mode="HTML", reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+def update_bus_data(update, context):
+    updateBusData.main()
+    logging.info("Updated Bus Data")
 
-#Handles invalid commands & logs request
-def unknown(bot, update):
-    bot.send_message(chat_id=update.message.chat_id, text="Please enter a valid command")
-    logging.info("Invalid command: %s [%s] (%s)", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id)
-
-def error_callback(bot, update, error):
-    if TimedOut:
-        return
-    else:
-        logging.warning('Update "%s" caused error "%s"', update, error)
-
-def send_message_to_owner(bot, update):
-    bot.send_message(chat_id=owner_id, text=update)
-
-def broacastMessage(text):
+def broadcast_message(bot, text):
+    cur = conn.cursor()
     cur.execute('''SELECT * FROM user_data WHERE state = 1''')
     row = cur.fetchall()
     for x in row:
         chat_id = json.loads(x[0])
-        try: #Try to send a message to the user. If the user has blocked the bot, just skip
+        try:  # Try to send a message to the user. If the user has blocked the bot, just skip
             bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
-        except:
+        except:     # TODO: Change this except clause to a more specific one
             pass
+    cur.close()
     logging.info("Broadcast complete")
 
-def check_valid_bus_stop(message):
-    if message == False:
-        return (False, False)
-    #Converts message to a processable form
-    message = "".join([x for x in message if x.isalnum()]).lower()
-    #Loads bus stop database from busStop.txt
-    with open("busStop.txt", "rb") as afile:
-        busStopDB = pickle.load(afile)
-    flag=0
+def send_message_to_owner(bot, message):
+    bot.send_message(user_id=OWNER_ID, text=message)
 
-    #For each bus stop in the database, check if passed message is found
-    for sublist in busStopDB[0]:
-        busStopName = "".join([y for y in sublist[1] if y.isalnum()]).lower()
-        #Check for bus stop number or stop name
-        if (message in sublist) or (message == busStopName):
-            return (sublist[0], sublist[1]) #Return bus stop details - bus stop code, bus stop name
-            flag = 1
-            break
+def fetch_user_favourites(user_id):
+    """
+    Returns a list of the user's favourite bus stops
 
-    #If none, return False
-    if flag!=1:
-        return (False, False)
-
-def get_time(service): #Pass pjson data to return timeLeft and timeFollowingLeft
-
-    if (service["NextBus"]["EstimatedArrival"].split("+")[0] == ""):
-        return "NA", "NA" #If next bus timing does not exist, return NA
-    else:
-        nextBusTime = datetime.datetime.strptime(service["NextBus"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S") #Get next bus timing
-        try:
-            followingBusTime = datetime.datetime.strptime(service["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
-        except:
-            followingBusTime = "NA"
-
-        currentTime = (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).replace(microsecond=0)
-
-        if currentTime > nextBusTime: #If bus is late...
-            timeLeft = "00"
-        else:
-            timeLeft = str((nextBusTime - currentTime)).split(":")[1] #Return time next for next bus
-
-        if followingBusTime != "NA":
-            timeFollowingLeft = str((followingBusTime - currentTime)).split(":")[1] #Else, return time left for following bus
-        else:
-            timeFollowingLeft = followingBusTime
-        return timeLeft, timeFollowingLeft
-
-def check_valid_favourite(update):
-    user = update.message.chat.id
-    message = update.message.text
-
-    try:
-        cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id,))
-    except Exception as e:
-        conn = psycopg2.connect(
-            database=url.path[1:],
-            user=url.username,
-            password=url.password,
-            host=url.hostname,
-            port=url.port
-        )
-        cur = conn.cursor()
-        cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id,))
-
+    :param user_id: Telegram User ID
+    :return: List of favourite bus stops: [[Code, Saved Name],[]]
+    """
+    cur = conn.cursor()
+    cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (user_id,))
     row = cur.fetchall()
-    if row == []:
-        sf = []
+
+    if row:
+        favourites = json.loads(row[0][3])
     else:
-        sf = json.loads(row[0][3])
-    for x in sf:
-    	isit = message in x[0]
-    	if isit == True:
-    		return x[1]
-    return message
+        favourites = []
 
-def send_bus_timings(bot, update, isCallback=False):
-    #Replies user based on updates received
-    text = ""
+    cur.close()
+    return favourites
 
-    #Assign message variable depending on request type
-    if isCallback == True:
-        CallbackQuery = update.callback_query
-        message = CallbackQuery.message.text.split()[0]
-    else: #Check if it exists in user's favourites
-        message = check_valid_favourite(update)
+def generate_reply_keyboard(favourites):
+    """
+    Creates a Telegram Keyboard with favourite bus stops
 
+    :param favourites: List of favourite bus stops
+    :return: List of KeyboardButtons for ReplyKeyboard
+    """
 
-    #Call function and assign to variables
-    busStopCode, busStopName = check_valid_bus_stop(message)
-
-    if busStopCode == False:
-        #Informs the user that busStopCode was invalid & logs it
-        bot.send_message(chat_id=update.message.chat_id, text="Please enter a valid bus stop code", parse_mode="Markdown")
-        logging.info("Invalid request: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, message)
-        return
-
-    else:
-        header = "*{} - {}*\n".format(busStopCode,busStopName)
-        text += header
-
-        #HTTP Request to check bus timings
-        url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
-        url += busStopCode
-        request = urllib.request.Request(url)
-        request.add_header('AccountKey', LTA_Account_Key)
-        response = urllib.request.urlopen(request)
-        pjson = json.loads(response.read().decode("utf-8"))
-
-        #For each bus service that is returned
-        for service in pjson["Services"]:
-            timeLeft, timeFollowingLeft = get_time(service)
-
-            #Display time left for each service
-            text += service["ServiceNo"]+"    "
-            if (timeLeft == "00"):
-                text += "Arr"
-            else:
-                text += timeLeft+" min"
-            text += "    "
-            if (timeFollowingLeft == "00"):
-                text += "Arr"
-            else:
-                text += timeFollowingLeft+" min"
-            text += "\n"
-
-
-        if (text == header): #If no results were returned
-            text += "No more buses at this hour"
-    #Format of inline refresh button
-    button_list = [
-        [
-            InlineKeyboardButton("Refresh", callback_data="Hey")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(button_list)
-
-    #If it's a callback function,
-    if isCallback == True:
-        #Reply to the user and log it
-        text += "\n_Last Refreshed: " + (datetime.datetime.utcnow()+datetime.timedelta(hours=8)).strftime('%H:%M:%S') + "_"
-        logging.info("Refresh: %s [%s] (%s), %s", CallbackQuery.from_user.first_name, CallbackQuery.from_user.username, CallbackQuery.from_user.id, message)
-        bot.editMessageText(chat_id=CallbackQuery.message.chat_id, message_id=CallbackQuery.message.message_id, text=text, parse_mode="Markdown", reply_markup=reply_markup)
-        bot.answerCallbackQuery(callback_query_id=CallbackQuery.id)
-
-    #Else, send a new message
-    else:
-        logging.info("Request: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, message)
-        bot.send_message(chat_id=update.message.chat_id, text=text, parse_mode="Markdown", reply_markup=reply_markup)
-
-def send_location_timing(bot, update):
-    location = (update.message.location.latitude, update.message.location.longitude)
-    with open("busStop.txt", "rb") as afile:
-        busStopDB = pickle.load(afile)
-
-    text = ""
-    tree = spatial.KDTree(busStopDB[1])
-    index = tree.query(location, k=5)
-    for x in range(len(index[1])):
-        busStopCode = busStopDB[0][index[1][x]][0]
-        busStopName = busStopDB[0][index[1][x]][1]
-
-        header = "*{} - {}*\n".format(busStopCode,busStopName)
-        text += header
-
-        #HTTP Request to check bus timings
-        url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
-        url += busStopCode
-        request = urllib.request.Request(url)
-        request.add_header('AccountKey', LTA_Account_Key)
-        response = urllib.request.urlopen(request)
-        pjson = json.loads(response.read().decode("utf-8"))
-
-        #For each bus service that is returned
-        for service in pjson["Services"]:
-            timeLeft, timeFollowingLeft = get_time(service)
-
-            #Display time left for each service
-            text += service["ServiceNo"]+"    "
-            if (timeLeft == "00"):
-                text += "Arr"
-            else:
-                text += timeLeft+" min"
-            text += "    "
-            if (timeFollowingLeft == "00"):
-                text += "Arr"
-            else:
-                text += timeFollowingLeft+" min"
-            text += "\n"
-
-
-        if (text == header): #If no results were returned
-            text += "No more buses at this hour\n"
-        text += "\n"
-
-    logging.info("Location: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, location)
-    bot.send_message(chat_id=update.message.chat_id, text=text, parse_mode="Markdown")
-
-def refresh_timings(bot, update):
-    send_bus_timings(bot, update, isCallback=True)
-
-def update_bus_data(bot, update):
-    updateBusData.main()
-    logging.info("Updated Bus Data")
-
-def serviceUpdate(bot, update):
-    url = "http://datamall2.mytransport.sg/ltaodataservice/TrainServiceAlerts"
-    request = urllib.request.Request(url)
-    request.add_header('AccountKey', LTA_Account_Key)
-    response = urllib.request.urlopen(request)
-    pjson = json.loads(response.read().decode("utf-8"))
-
-    if (pjson["value"]["Message"] != []):
-        if pjson["value"]["Message"][0]["Content"] != serviceUpdate:
-            serviceUpdate = pjson["value"]["Message"][0]["Content"]
-            logging.info("Service update: " + serviceUpdate)
-            broacastMessage(serviceUpdate)
-
-class FilterBusService(BaseFilter): #Create a new telegram filter, filter out bus Services
-    def filter(self, message):
-        with open("busServiceNo.txt", "rb") as afile:
-            busServiceNo = pickle.load(afile)
-        return message.text.upper() in busServiceNo
-
-busService_filter = FilterBusService()
-
-#ConversationHandler for bus services
-
-BUSSERVICE = range(1)
-
-def askBusRoute(bot, update, user_data): #Takes in bus service and outputs direction, waiting for user's confirmation
-    busNumber = update.message.text.upper()
-
-    with open("busService.txt", "rb") as afile:
-        busServiceDB = pickle.load(afile)
-
-    out = [element for element in busServiceDB if element['serviceNo'] == busNumber] #Find the direction(s) out that bus service
+    temp = []
     reply_keyboard = []
-    for x in range(len(out)): #Generates a reply_keyboard with the directions
-        busStopCodeStart, busStopNameStart = check_valid_bus_stop(out[x]["BusStopCode"][0])
-        busStopCodeEnd, busStopNameEnd = check_valid_bus_stop(out[x]["BusStopCode"][-1])
-        st = "%s - %s" % (busStopNameStart, busStopNameEnd)
-        text = [st]
-        reply_keyboard.append(text)
-    user_data["busService"] = [busNumber, reply_keyboard] #Pass the generated data to user_data
-    update.message.reply_text("Which direction?", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True)) #Asks user for input
-    logging.info("Service Request: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, busNumber)
 
-    return BUSSERVICE
-
-def sendTyping(bot, job):
-    bot.send_chat_action(chat_id=job.context, action="typing", timeout=30)
-
-def findBusRoute(bot, update, user_data): #Once user has replied with direction, output the arrival timings
-    job_sendTyping = job.run_repeating(sendTyping, interval = 5, first=0, context=update.message.from_user.id)
-    reply = update.message.text
-
-    #Create the usual reply_keyboard
-    sf = fetch_user_data(update)
-    reply_keyboard = generate_reply_keyboard(sf)
-
-    if [reply] in user_data["busService"][1]: #Ensures that the user reply is a valid one
-        direction = user_data["busService"][1].index([reply]) #Gets the direction in terms of a int
-        busNumber = user_data["busService"][0]
-
-        with open("busService.txt", "rb") as afile:
-            busServiceDB = pickle.load(afile)
-
-        out = [element for element in busServiceDB if element['serviceNo'] == busNumber] #Gets all directions of bus service
-        header = "Bus %s (%s)" % (str(busNumber), reply)
-        message = "<i>%s</i>\n" % header
-        flag = 0
-
-        for busStopCode in out[direction]["BusStopCode"]: #For every bus stop code in that direction
-            url = "http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode="
-            url += busStopCode
-            request = urllib.request.Request(url)
-            request.add_header('AccountKey', LTA_Account_Key)
-            response = urllib.request.urlopen(request)
-            pjson = json.loads(response.read().decode("utf-8")) #Get the raw data from LTA
-
-            service = [element for element in pjson["Services"] if element['ServiceNo'] == busNumber] #Select the correct bus service from raw data
-            if service == []: #If there are no more buses for the day
-                timeLeft = "NA"
-            else: #Else, return the timings
-                timeLeft, timeFollowingLeft = get_time(service[0]) #and gets the arrival time
-            busStopCode, busStopName = check_valid_bus_stop(busStopCode)
-            text = "<b>%s </b>( /%s )   " % (busStopName, busStopCode)
-            if timeLeft != "NA":
-                flag = 1
-            if timeLeft == "00":
-                text += "Arr"
-            else:
-                text += timeLeft + " min"
-            message += text + "\n"
-
-        if flag == 0:
-            message = "<i>%s</i>\n" % header + "No more buses at this hour"
-        job_sendTyping.schedule_removal()
-        update.message.reply_text(message, reply_markup=ReplyKeyboardMarkup(reply_keyboard), parse_mode="HTML", resize_keyboard=True)
-        logging.info("Service Request: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, header)
-    else:
-        job_sendTyping.schedule_removal()
-        update.message.reply_text("Invalid direction", reply_markup=ReplyKeyboardMarkup(reply_keyboard), parse_mode="HTML", resize_keyboard=True)
-        logging.info("Invalid direction: %s [%s] (%s), %s", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id, reply)
-    user_data.clear()
-    return ConversationHandler.END
-
-#Initialise some variables for the service ConversationHandler function
-ADD, NAME, POSITION, CONFIRM, REMOVE, REMOVECONFIRM = range(6)
-
-def generate_reply_keyboard(sf):
-    i=1
-    temp=[]
-    reply_keyboard=[]
-    for x in sf:
-        temp.append(x[0])
-        if i%2==0:
-        	reply_keyboard.append(temp)
-        	temp=[]
-        if (i%2==1 and i == len(sf)):
+    for i, favourite in enumerate(favourites, start=1):
+        temp.append(favourite[0])
+        if i % 2 == 0:
             reply_keyboard.append(temp)
-        i+=1
+            temp = []
+        if i % 2 == 1 and i == len(favourites):
+            reply_keyboard.append(temp)
+
     reply_keyboard.append([telegram.KeyboardButton(text="Bus Stops Near Me", request_location=True)])
     return reply_keyboard
 
-def fetch_user_data(update):
-    try:
-        cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id, ))
-    except Exception as e:
-        conn = psycopg2.connect(
-            database=url.path[1:],
-            user=url.username,
-            password=url.password,
-            host=url.hostname,
-            port=url.port
-        )
-        cur = conn.cursor()
-        cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (update.message.from_user.id, ))
+##################
+# MAIN FUNCTIONS #
+##################
 
-    conn.commit()
-    row = cur.fetchall()
-    if row == []:
-        sf = []
-    else:
-        sf = json.loads(row[0][3])
-    return sf
-
-#Settings menu
-def settings(bot, update, user_data):
-    logging.info("Accessing settings: %s [%s] (%s)", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id)
-    sf = fetch_user_data(update)
-
-    #If user has no favourites, no remove option will be given
-    if sf == []:
-        reply_keyboard = [["Add Favourite"]]
-    else:
-        reply_keyboard = [["Add Favourite", "Remove Favourite"]]
-    update.message.reply_text(
-        "What would you like to do?\n"
-        "Send /cancel to stop this at any time", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
-        )
-    return ADD
-
-def add_favourite(bot, update, user_data):
-    user_data.clear()
-    update.message.reply_text("Please enter a bus stop code")
-    return NAME
-
-def choose_name(bot, update, user_data):
+def commands(update, context):
+    cur = conn.cursor()
     message = update.message.text
-    busStopCode, busStopName = check_valid_bus_stop(message)
+    user = update.effective_user
+    reply_text = telegramCommands.check_commands(context.bot, message)
 
-    if busStopCode == False:
-        #Informs the user that busStopCode was invalid & logs it
-        update.message.reply_text("Try again. Please enter a valid bus stop code")
-        return ADD
+    if '/broadcast' in message and user.id == int(OWNER_ID):
+        broadcast_message(context.bot, reply_text)
+    elif message == '/start':
+        # Adds a new row of data for new users
+        cur.execute(
+            '''INSERT INTO user_data (user_id, username, first_name, favourite, state) VALUES ('%s', %s, %s, %s, 1)
+            ON CONFLICT (user_id) DO UPDATE SET state = 1''',
+            (user.id, user.username, user.first_name, '[]'))
+        conn.commit()
+    elif '/stop' in message:
+        cur.execute('''UPDATE user_data SET state = 0 WHERE user_id = '%s' ''', (user.id,))
+        conn.commit()
+    elif not reply_text:
+        logging.info(f"Invalid Command: {user.first_name} [{user.username}] ({user.id}), {message}")
+        update.message.reply_text(text="Please enter a valid command")
+
+    favourites = fetch_user_favourites(user.id)
+    reply_keyboard = generate_reply_keyboard(favourites)
+    cur.close()
+    # Logs and sends message
+    logging.info(f"Command: {user.first_name} [{user.username}] ({user.id}), {message}")
+    update.message.reply_text(text=reply_text, reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+
+def check_valid_favourite(message):
+    """
+    Checks if the passed bus stop is a favourite bus stop
+
+    :param message: update.message object
+    :return: Favourite bus stop code if exists, else original message
+    """
+
+    text = message.text
+    cur = conn.cursor()
+    cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (message.from_user.id,))
+    row = cur.fetchall()
+
+    if row:
+        favourites = json.loads(row[0][3])
+    else:
+        return text
+
+    for favourite in favourites:
+        # favourite = [saved name, bus stop id]
+        if text in favourite[0]:
+            return favourite[1]
+
+    cur.close()
+    return text
+
+def check_valid_bus_stop(message):
+    """
+    Takes in a whole message and determine if it's a valid bus stop
+
+    :param message: str of sent message
+    :return: bus stop code, bus stop name
+    """
+
+    if not message:     # If message is NoneType
+        return False, False
+
+    # Converts message to a processable form
+    message = "".join([x.lower() for x in message if x.isalnum()])
+    # Loads bus stop database from busStop.txt
+    with open("busStop.txt", "rb") as afile:
+        bus_stop_db = pickle.load(afile)
+
+    # For each bus stop in the database, check if passed message is found
+    # TODO: See if there's a way to speed this checking up. A dict?
+    for sublist in bus_stop_db[0]:
+        bus_stop_name = "".join([y.lower() for y in sublist[1] if y.isalnum()])
+        # Check for bus stop number or stop name
+        if (message in sublist) or (message == bus_stop_name):
+            # Return bus stop code, bus stop name
+            return sublist[0], sublist[1]
+
+    return False, False
+
+def get_next_bus_time(service):
+    """
+    Processes the API call for the next 2 bus timings.
+
+    :param service: LTA_API JSON given a bus stop
+    :return: time_left, time_following_left
+    """
+
+    # Pass pjson data to return timeLeft and timeFollowingLeft
+    if service["NextBus"]["EstimatedArrival"].split("+")[0] == "":
+        # If next bus timing does not exist, return NA
+        return "NA", "NA"
+
+    current_time = (datetime.utcnow() + timedelta(hours=8)).replace(microsecond=0)
+
+    # Get next bus timing
+    next_bus_time = datetime.strptime(service["NextBus"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+    if current_time > next_bus_time:  # If bus is late
+        time_left = "00"
+    else:
+        time_left = str((next_bus_time - current_time)).split(":")[1]  # Return time next for next bus
+
+    # Get following bus timing
+    try:
+        following_bus_time = datetime.strptime(service["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+        time_following_left = str(following_bus_time - current_time).split(":")[1]
+        return time_left, time_following_left
+    except ValueError:
+        return time_left, "NA"
+
+def create_bus_timing_message(bus_stop_code, bus_stop_name):
+    """
+    Creates the bus timing message and formats it
+
+    :param bus_stop_code: str, 5-digit bus stop code
+    :param bus_stop_name: str, name of bus stop
+    :return: str, message to be sent
+    """
+
+    text = f"*{bus_stop_code} - {bus_stop_name}*\n"
+
+    # HTTP Request to check bus timings
+    url = f"http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode={bus_stop_code}"
+    headers = {"AccountKey": LTA_ACCOUNT_KEY}
+    r = requests.get(url, headers=headers)
+    pjson = r.json()
+
+    # For each bus service that is returned
+    for service in pjson["Services"]:
+        time_left, time_following_left = get_next_bus_time(service)
+
+        # Display time left for each service
+        text += str(service['ServiceNo']).ljust(7)
+        if time_left == "00":
+            text += "Arr".ljust(6)
+        else:
+            text += f"{time_left} min".ljust(6)
+
+        text += "    "
+
+        if time_following_left == "00":
+            text += "Arr".ljust(6)
+        else:
+            text += f"{time_following_left} min"
+        text += "\n"
+
+    if not pjson["Services"]:  # If no results were returned
+        text += "No more buses at this hour"
+
+    return text
+
+def send_bus_timings(update, context):
+    # Assign message variable depending on request type
+    if update.callback_query:
+        message = update.effective_message.text.split()[0]
+        user = update.effective_user
+    else:  # Check if it exists in user's favourites
+        message = check_valid_favourite(update.message)
+        user = update.message.from_user
+
+    # Call function and assign to variables
+    bus_stop_code, bus_stop_name = check_valid_bus_stop(message)
+
+    if not bus_stop_code:
+        # Informs the user that bus_stop_code was invalid & logs it
+        update.message.reply_text(text="Please enter a valid bus stop code")
+        logging.info(f"Invalid request: {user.first_name} [{user.username}] ({user.id}), {message}")
+        return
+    else:
+        text = create_bus_timing_message(bus_stop_code, bus_stop_name)
+        text = _escape_markdown(text)
+
+    # Format of inline refresh button
+    button_list = [
+        [InlineKeyboardButton("Refresh", callback_data="Refresh")]
+    ]
+    reply_markup = InlineKeyboardMarkup(button_list)
+
+    # If it's a callback function,
+    if update.callback_query:
+        # Reply to the user and log it
+        text += f"\n_Last Refreshed: {(datetime.utcnow() + timedelta(hours=8)).strftime('%H:%M:%S')}_"
+        logging.info(f"Refresh: {user.first_name} [{user.username}] ({user.id}), {message}")
+        update.effective_message.edit_text(text=text, parse_mode="MarkdownV2", reply_markup=reply_markup)
+        update.callback_query.answer()
+
+    # Else, send a new message
+    else:
+        logging.info(f"Request: {user.first_name} [{user.username}] ({user.id}), {message}")
+        update.message.reply_markdown_v2(text=text, reply_markup=reply_markup)
+
+def send_location_timing(update, context):
+    user = update.message.from_user
+    location = (update.message.location.latitude, update.message.location.longitude)
+    with open("busStop.txt", "rb") as afile:
+        bus_stop_db = pickle.load(afile)
+
+    text = ""
+    tree = spatial.KDTree(bus_stop_db[1])
+    index = tree.query(location, k=5)
+    for x in range(len(index[1])):
+        bus_stop_code = bus_stop_db[0][index[1][x]][0]
+        bus_stop_name = bus_stop_db[0][index[1][x]][1]
+
+        text += create_bus_timing_message(bus_stop_code, bus_stop_name)
+        text += "\n"
+
+    text = _escape_markdown(text)
+    logging.info(f"Location: {user.first_name} [{user.username}] ({user.id}), {location}")
+    update.message.reply_markdown_v2(text=text)
+
+
+#####################
+# BUS ROUTE HANDLER #
+#####################
+
+# Create a new telegram filter, filter out bus Services
+class FilterBusService(BaseFilter):
+    def filter(self, message):
+        if not message.text:    # Handles non-message entities to prevent errors
+            return False
+        with open("busServiceNo.txt", "rb") as afile:
+            bus_service_no = pickle.load(afile)
+        return message.text.upper() in bus_service_no
+bus_service_filter = FilterBusService()
+
+# ConversationHandler for bus services
+SEND_BUS_SERVICE = map(chr, range(1))
+
+def ask_bus_route(update, context):
+    # Takes in bus service and outputs direction, waiting for user's confirmation
+    bus_number = update.message.text.upper()
+    user = update.message.from_user
+
+    with open("busService.txt", "rb") as afile:
+        bus_service_db = pickle.load(afile)
+
+    # Find the direction(s) out that bus service
+    directions = [element for element in bus_service_db if element['service_no'] == bus_number]
+    reply_keyboard = []
+
+    # Generates a reply_keyboard with the directions
+    for direction in directions:
+        bus_stop_code_start, bus_stop_name_start = check_valid_bus_stop(direction["bus_stops"][0])
+        bus_stop_code_end, bus_stop_name_end = check_valid_bus_stop(direction["bus_stops"][-1])
+        reply_keyboard.append([f"{bus_stop_name_start} - {bus_stop_name_end}"])
+
+    context.user_data["bus_service"] = [bus_number, reply_keyboard, directions]  # Pass the generated data to user_data
+    update.message.reply_text("Which direction?",
+                              reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True,
+                                                               resize_keyboard=True, selective=True))
+    logging.info(f"Service Request: {user.first_name} [{user.username}] ({user.id}), {bus_number}")
+
+    return SEND_BUS_SERVICE
+
+def bot_send_typing(context):
+    context.bot.send_chat_action(chat_id=context.job.context, action="typing", timeout=30)
+
+def send_bus_route(update, context):  # Once user has replied with direction, output the arrival timings
+    reply = update.message.text
+    user = update.effective_user
+    job_send_typing = job.run_repeating(bot_send_typing, interval=5, first=0, context=update.effective_chat.id)
+
+    # Create the usual reply_keyboard
+    favourites = fetch_user_favourites(user.id)
+    reply_keyboard = generate_reply_keyboard(favourites)
+
+    if [reply] in context.user_data["bus_service"][1]:  # Ensures user reply is a valid direction
+        direction = context.user_data["bus_service"][1].index([reply])  # Gets the direction in terms of a int
+        bus_number = context.user_data["bus_service"][0]
+        directions = context.user_data["bus_service"][2]
+
+        header = f"Bus {str(bus_number)} ({reply})"
+        message = f"__{header}__\n"
+        flag = 0
+
+        for bus_stop_code in directions[direction]["bus_stops"]:  # For every bus stop code in that direction
+            url = f"http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode={bus_stop_code}"
+            headers = {"AccountKey": LTA_ACCOUNT_KEY}
+            r = requests.get(url, headers=headers)
+            pjson = r.json()
+
+            # Select the correct bus service from raw data
+            service = [element for element in pjson["Services"] if element['ServiceNo'] == bus_number]
+            if service:     # Get the arrival time
+                time_left, time_following_left = get_next_bus_time(service[0])
+            else:       # If there are no more buses for the day
+                time_left = "NA"
+
+            bus_stop_code, bus_stop_name = check_valid_bus_stop(bus_stop_code)
+            text = f"*{bus_stop_name}* ( /{bus_stop_code} )   "
+            if time_left != "NA":
+                flag = 1
+            if time_left == "00":
+                text += "Arr"
+            else:
+                text += f"{time_left} min"
+            message += text + "\n"
+
+        if flag == 0:
+            message = f"__{header}__\nNo more buses at this hour"
+
+        job_send_typing.schedule_removal()
+        message = _escape_markdown(message)
+        update.message.reply_markdown_v2(message, reply_markup=ReplyKeyboardMarkup(reply_keyboard), resize_keyboard=True)
+        logging.info(f"Service Request: {user.first_name} [{user.username}] ({user.username}), {header}")
 
     else:
-        user_data["busStopCode"] = busStopCode
-        update.message.reply_text("What would you like to name: {} - {}?".format(busStopCode, busStopName))
-        return POSITION
+        job_send_typing.schedule_removal()
+        update.message.reply_markdown_v2("Invalid direction", reply_markup=ReplyKeyboardMarkup(reply_keyboard),
+                                        resize_keyboard=True)
+        logging.info(f"Invalid direction: {user.first_name} [{user.username}] ({user.username}), {reply}")
 
-#Asks user to confirm favourite
-def to_confirm(bot, update, user_data):
-    user_data["name"] = update.message.text
-    reply_keyboard = [["Yes", "No"]]
-    update.message.reply_text("Please confirm that you would like to add {} - {}".format(user_data["name"], user_data["busStopCode"]), reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
-    return CONFIRM
+    context.user_data.clear()
+    return ConversationHandler.END
 
-#Adds favourite into database
-def confirm_favourite(bot, update, user_data):
+####################
+# SETTINGS HANDLER #
+####################
 
-    #Fetches data from database
-    sf = fetch_user_data(update)
-    user_data["sf"] = sf
+# Initialise some variables for the service ConversationHandler function
+SETTINGS, RE_SETTINGS, CANCEL, ADD_FAVOURITE, ADD_FAVOURITE_CODE, ADD_FAVOURITE_NAME, \
+CONFIRM_ADD_FAVOURITE, REMOVE_FAVOURITE, CHECK_REMOVE_FAVOURITE, CONFIRM_REMOVE_FAVOURITE = map(chr, range(2, 12))
 
-    #Adds new favourite to the list
-    sf.append([user_data["name"], user_data["busStopCode"]])
-    insert_sf = json.dumps(sf)
-    cur.execute('''INSERT INTO user_data (user_id, username, first_name, favourite, state) VALUES ('%s', %s, %s, %s, 1) ON CONFLICT (user_id) DO UPDATE SET favourite = %s; ''', (update.message.from_user.id, update.message.from_user.username, update.message.from_user.first_name, insert_sf, insert_sf))
+def settings(update, context):
+    user = update.effective_user
+    logging.info(f"Accessing settings: {user.first_name} [{user.username}] ({user.id})")
+    favourites = fetch_user_favourites(user.id)
+
+    # If user has no favourites, no remove option will be given
+    if favourites:
+        buttons = [[
+            InlineKeyboardButton(text='Add Favourite', callback_data=str(ADD_FAVOURITE)),
+            InlineKeyboardButton(text='Remove Favourite', callback_data=str(REMOVE_FAVOURITE))
+        ],[
+            InlineKeyboardButton(text='Cancel', callback_data=str(CANCEL))
+        ]]
+    else:
+        buttons = [[
+            InlineKeyboardButton(text='Add Favourite', callback_data=str(ADD_FAVOURITE))
+        ],[
+            InlineKeyboardButton(text='Cancel', callback_data=str(CANCEL))
+        ]]
+
+    update.message.reply_text("What would you like to do?", reply_markup=InlineKeyboardMarkup(buttons))
+    return SETTINGS
+
+def add_favourite(update, context):
+    context.user_data.clear()
+
+    try:
+        update.callback_query.answer()
+        update.callback_query.message.edit_text("What would you like to do?")
+        update.callback_query.message.reply_text("Please enter a bus stop code")
+    except AttributeError:  # When there is no callback_query to be answered
+        update.message.reply_text("Please enter a bus stop code")
+
+    return ADD_FAVOURITE_CODE
+
+def choose_favourite_stop(update, context):
+    message = update.message.text
+    bus_stop_code, bus_stop_name = check_valid_bus_stop(message)
+
+    if bus_stop_code is False:
+        # Informs the user that busStopCode was invalid & logs it
+        update.message.reply_text("Try again. Please enter a valid bus stop code")
+        return ADD_FAVOURITE_CODE
+
+    else:
+        favourites = fetch_user_favourites(update.effective_user.id)
+        if favourites:
+            existing_favourite_codes = list(zip(*favourites))[1]    # Takes all the 1st elements of favourites
+            if bus_stop_code in existing_favourite_codes:
+                update.message.reply_text("Favourite bus stop already added. Please choose another one")
+                return ADD_FAVOURITE_CODE
+
+        context.user_data["bus_stop_code"] = bus_stop_code
+        update.message.reply_text(f"What would you like to name: {bus_stop_code} - {bus_stop_name}?")
+        return ADD_FAVOURITE_NAME
+
+# Asks user to confirm favourite
+def choose_favourite_name(update, context):
+    favourites = fetch_user_favourites(update.effective_user.id)
+    if favourites:
+        existing_favourite_names = list(zip(*favourites))[0]  # Takes all the 0th elements of favourites
+        if update.message.text in existing_favourite_names:
+            update.message.reply_text("Name already exists. Please choose another name.")
+            return ADD_FAVOURITE_NAME
+
+    context.user_data["bus_stop_name"] = update.message.text
+
+    buttons = [[InlineKeyboardButton(text='Yes', callback_data='ADD_YES'),
+               InlineKeyboardButton(text='No', callback_data='ADD_NO')]]
+
+    reply_message = f"Please confirm that you would like to add " \
+                    f"{context.user_data['bus_stop_name']} - {context.user_data['bus_stop_code']}"
+    context.user_data["previous_message"] = reply_message
+
+    update.message.reply_text(reply_message, reply_markup=InlineKeyboardMarkup(buttons))
+    return CONFIRM_ADD_FAVOURITE
+
+# Adds favourite into database
+def confirm_add_favourite(update, context):
+    user = update.effective_user
+    favourites = fetch_user_favourites(user.id)
+    context.user_data["favourites"] = favourites
+
+    # Adds new favourite to the list
+    favourites.append([context.user_data["bus_stop_name"], context.user_data["bus_stop_code"]])
+    insert_sf = json.dumps(favourites)
+    cur = conn.cursor()
+    cur.execute(
+        '''INSERT INTO user_data (user_id, username, first_name, favourite, state) VALUES ('%s', %s, %s, %s, 1)
+        ON CONFLICT (user_id) DO UPDATE SET favourite = %s; ''',
+        (user.id, user.username, user.first_name, insert_sf, insert_sf))
+    cur.close()
     conn.commit()
 
-    reply_keyboard = generate_reply_keyboard(sf)
+    reply_keyboard = generate_reply_keyboard(favourites)
+    update.effective_message.edit_text(context.user_data["previous_message"])
+    update.effective_message.reply_text("Added favourite bus stop!",
+                              reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+    logging.info("Added New Favourite: %s [%s] (%s)", user.first_name, user.username, user.id)
+    context.user_data.clear()
 
-    logging.info("Added New Favourite: %s [%s] (%s)", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id)
-    update.message.reply_text("Added!", reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
-    user_data.clear()
+    buttons = [[
+        InlineKeyboardButton(text='Add Favourite', callback_data=str(ADD_FAVOURITE)),
+        InlineKeyboardButton(text='Remove Favourite', callback_data=str(REMOVE_FAVOURITE))
+    ], [
+        InlineKeyboardButton(text='Cancel', callback_data=str(CANCEL))
+    ]]
+    update.effective_message.reply_text("Is there anything else you would like to do?",
+                                        reply_markup=InlineKeyboardMarkup(buttons))
+
     return ConversationHandler.END
 
-def remove_favourite(bot, update, user_data):
-    user_data.clear()
+def remove_favourite(update, context):
+    update.callback_query.answer()
+    context.user_data.clear()
 
-    #Gets data from database
-    sf = fetch_user_data(update)
-    user_data["sf"] = sf
+    # Gets data from database
+    favourites = fetch_user_favourites(update.effective_user.id)
+    context.user_data["favourites"] = favourites
+    reply_keyboard = generate_reply_keyboard(favourites)
 
-    reply_keyboard = generate_reply_keyboard(sf)
+    update.callback_query.message.edit_text("What would you like to do?")
+    update.callback_query.message.reply_text("What bus stop would you like to remove?",
+                              reply_markup=ReplyKeyboardMarkup(reply_keyboard))
+    return CHECK_REMOVE_FAVOURITE
 
-    update.message.reply_text("What bus stop would you like to remove?", reply_markup=ReplyKeyboardMarkup(reply_keyboard))
-    return REMOVE
+# Asks user to confirm removing bus stop
+def check_remove_favourite(update, context):
+    favourites = context.user_data["favourites"]
+    for favourite in favourites:
+        if update.message.text == favourite[0]:
+            stop_to_remove = favourite
+            break
+    else:
+        reply_keyboard = generate_reply_keyboard(favourites)
+        update.message.reply_text("Please choose a valid favourite bus stop!",
+                                  reply_markup=ReplyKeyboardMarkup(reply_keyboard))
+        return REMOVE_FAVOURITE
 
-#Asks user to confirm removing bus stop
-def to_remove(bot, update, user_data):
-    sf = user_data["sf"]
-    for x in sf:
-        if update.message.text in x:
-            index = sf.index(x)
-    to_remove = sf[index]
-    user_data["remove"] = to_remove
+    context.user_data["remove"] = stop_to_remove
 
-    reply_keyboard = [["Yes", "No"]]
-    update.message.reply_text("Are you sure you want to remove {} - {}?".format(to_remove[0], to_remove[1]), reply_markup=ReplyKeyboardMarkup(reply_keyboard), one_time_keyboard=True)
-    return REMOVECONFIRM
+    buttons = [[InlineKeyboardButton(text='Yes', callback_data='REMOVE_YES'),
+                InlineKeyboardButton(text='No', callback_data='REMOVE_NO')]]
+    reply_message = f"Are you sure you want to remove {stop_to_remove[0]} - {stop_to_remove[1]}?"
+    context.user_data["previous_message"] = reply_message
 
-def confirm_remove(bot, update, user_data):
-    #Inserts the new list into the database
-    user_data["sf"].remove(user_data["remove"])
-    sf = user_data["sf"]
-    insert_sf = json.dumps(sf)
-    cur.execute('''UPDATE user_data SET favourite = %s WHERE user_id = '%s' ''', (insert_sf, update.message.from_user.id))
+    update.message.reply_text(reply_message, reply_markup=InlineKeyboardMarkup(buttons))
+
+    return CONFIRM_REMOVE_FAVOURITE
+
+def confirm_remove_favourite(update, context):
+    user = update.effective_user
+
+    # Inserts the new list into the database
+    context.user_data["favourites"].remove(context.user_data["remove"])
+    favourites = context.user_data["favourites"]
+    insert_sf = json.dumps(favourites)
+    cur = conn.cursor()
+    cur.execute('''UPDATE user_data SET favourite = %s WHERE user_id = '%s' ''',
+                (insert_sf, user.id))
+    cur.close()
     conn.commit()
 
-    reply_keyboard = generate_reply_keyboard(sf)
+    reply_keyboard = generate_reply_keyboard(favourites)
 
-    logging.info("Removed favourite: %s [%s] (%s)", update.message.from_user.first_name, update.message.from_user.username, update.message.from_user.id)
-    update.message.reply_text("Removed!", reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+    logging.info("Removed favourite: %s [%s] (%s)", user.first_name, user.username, user.id)
+    update.effective_message.edit_text(context.user_data["previous_message"])
+    update.effective_message.reply_text("Removed favourite bus stop!",
+                              reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+
+    context.user_data.clear()
+
+    # If user has no favourites, no remove option will be given
+    if favourites:
+        buttons = [[
+            InlineKeyboardButton(text='Add Favourite', callback_data=str(ADD_FAVOURITE)),
+            InlineKeyboardButton(text='Remove Favourite', callback_data=str(REMOVE_FAVOURITE))
+        ], [
+            InlineKeyboardButton(text='Cancel', callback_data=str(CANCEL))
+        ]]
+    else:
+        buttons = [[
+            InlineKeyboardButton(text='Add Favourite', callback_data=str(ADD_FAVOURITE))
+        ], [
+            InlineKeyboardButton(text='Cancel', callback_data=str(CANCEL))
+        ]]
+
+    update.effective_message.reply_text("Is there anything else you would like to do?",
+                                        reply_markup=InlineKeyboardMarkup(buttons))
+
     return ConversationHandler.END
 
-#Allows user to quit at anytime
-def cancel(bot, update, user_data):
-    #Generates reply_keyboard
-    sf = fetch_user_data(update)
+#########################################
+# CONVERSATION HANDLER HELPER FUNCTIONS #
+#########################################
 
-    reply_keyboard = generate_reply_keyboard(sf)
+# Allows user to quit at anytime
+def cancel(update, context):
+    # Generates reply_keyboard
+    favourites = fetch_user_favourites(update.effective_user.id)
+    reply_keyboard = generate_reply_keyboard(favourites)
 
-    update.message.reply_text("Ended", reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
-    user_data.clear()
+    update.effective_message.reply_text("Cancelled",
+                                        reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+    if update.callback_query:
+        update.callback_query.answer()
+    context.user_data.clear()
     return ConversationHandler.END
+
+def timeout(update, context):
+    favourites = fetch_user_favourites(update.effective_user.id)
+    reply_keyboard = generate_reply_keyboard(favourites)
+    context.user_data.clear()
+
+    update.effective_message.reply_text("Operated timed out. Please try again",
+                              reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+    return ConversationHandler.TIMEOUT
+
+def waiting(update, context):
+    update.message.reply_text(text="Still processing the last request... Please wait a while.")
+    return ConversationHandler.WAITING
+
+def unknown(update, context):
+    update.message.reply_text(text="Please enter a valid command")
+    logging.info("Invalid command: %s [%s] (%s)", update.message.from_user.first_name,
+                 update.message.from_user.username, update.message.from_user.id)
+
+def error_callback(update, context):
+    if context.error == TimedOut:
+        return
+    elif context.error == psycopg2.InterfaceError:
+        global conn
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
+        return
+    else:
+        logging.warning('Update "%s" caused error "%s"', update, context.error)
+        raise context.error
 
 def main():
-    serviceUpdate = ""
+    # Create users table for initial setup
+    cur = conn.cursor()
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS user_data(user_id TEXT, username TEXT, first_name TEXT, favourite TEXT, state int, PRIMARY KEY (user_id));")
+    conn.commit()
+    cur.close()
+
     telegram_logger = logging.getLogger('telegram.ext.updater')
     logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
     telegram_logger.addFilter(TimedOutFilter())
 
-    command_handler = MessageHandler(Filters.command, commands)
-    refresh_handler = CallbackQueryHandler(refresh_timings)
+    command_handler = CommandHandler(['start', 'help', 'about', 'feedback', 'broadcast', 'stop'], commands)
+    refresh_handler = CallbackQueryHandler(send_bus_timings, pattern='Refresh')
     bus_handler = MessageHandler(Filters.text, send_bus_timings)
     location_handler = MessageHandler(Filters.location, send_location_timing)
     unknown_handler = MessageHandler(Filters.all, unknown)
 
-    busService_handler = ConversationHandler(
-        entry_points=[MessageHandler(busService_filter, askBusRoute, pass_user_data=True)],
+    bus_service_handler = ConversationHandler(
+        entry_points=[MessageHandler(bus_service_filter, ask_bus_route)],
 
         states={
-            BUSSERVICE: [MessageHandler(Filters.text, findBusRoute, pass_user_data=True)]
+            SEND_BUS_SERVICE: [MessageHandler(Filters.text, send_bus_route)],
+            ConversationHandler.TIMEOUT: [MessageHandler(Filters.all, timeout)],
         },
 
-        fallbacks=[CommandHandler("cancel",cancel, pass_user_data=True)],
-        conversation_timeout = 60
+        fallbacks=[CommandHandler('cancel', cancel)],
+        conversation_timeout=30.0
+    )
+
+    add_favourite_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(add_favourite, pattern=f'{str(ADD_FAVOURITE)}')],
+
+        states={
+            ADD_FAVOURITE_CODE: [MessageHandler(Filters.text & (~Filters.command), choose_favourite_stop)],
+            ADD_FAVOURITE_NAME: [MessageHandler(Filters.text & (~Filters.command), choose_favourite_name)],
+            CONFIRM_ADD_FAVOURITE: [CallbackQueryHandler(confirm_add_favourite, pattern="ADD_YES"),
+                                    CallbackQueryHandler(add_favourite, pattern="ADD_NO")]
+        },
+
+        fallbacks=[CommandHandler('cancel', cancel)],
+
+        map_to_parent={
+            ConversationHandler.TIMEOUT: ConversationHandler.TIMEOUT,
+            ConversationHandler.END: SETTINGS
+        },
+        conversation_timeout=30.0
+    )
+
+    remove_favourite_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(remove_favourite, pattern=f'{str(REMOVE_FAVOURITE)}')],
+
+        states={
+            CHECK_REMOVE_FAVOURITE: [MessageHandler(Filters.text & ~Filters.command, check_remove_favourite)],
+            CONFIRM_REMOVE_FAVOURITE: [CallbackQueryHandler(confirm_remove_favourite, pattern="REMOVE_YES"),
+                                       CallbackQueryHandler(remove_favourite, pattern="REMOVE_NO")]
+        },
+
+        fallbacks=[CommandHandler('cancel', cancel)],
+
+        map_to_parent={
+            ConversationHandler.TIMEOUT: ConversationHandler.TIMEOUT,
+            ConversationHandler.END: SETTINGS,
+        },
+        conversation_timeout=30.0
     )
 
     settings_handler = ConversationHandler(
-        entry_points=[CommandHandler('settings', settings, pass_user_data=True)],
+        entry_points=[CommandHandler('settings', settings)],
 
         states={
-            ADD: [RegexHandler("^Add Favourite$", add_favourite, pass_user_data=True), RegexHandler("^Remove Favourite$", remove_favourite, pass_user_data=True)],
-            NAME: [MessageHandler(Filters.text, choose_name, pass_user_data=True)],
-            POSITION: [MessageHandler(Filters.text, to_confirm, pass_user_data=True)],
-            CONFIRM: [RegexHandler("Yes", confirm_favourite, pass_user_data=True), RegexHandler("No", add_favourite, pass_user_data=True)],
-            REMOVE: [MessageHandler(Filters.text, to_remove, pass_user_data=True)],
-            REMOVECONFIRM: [RegexHandler("Yes", confirm_remove, pass_user_data=True), RegexHandler("No", cancel, pass_user_data=True)]
+            SETTINGS: [CallbackQueryHandler(cancel, pattern=f'^{CANCEL}$'),
+                       add_favourite_handler, remove_favourite_handler],
+
+            CANCEL: [CallbackQueryHandler(cancel, pattern=f'^{CANCEL}$')],
+            ConversationHandler.TIMEOUT: [MessageHandler(Filters.all, timeout),
+                                          CallbackQueryHandler(timeout)],
         },
 
-        fallbacks=[CommandHandler("cancel",cancel, pass_user_data=True)],
-        allow_reentry = True,
-        conversation_timeout = 60
+        fallbacks=[CommandHandler('cancel', cancel)],
+        conversation_timeout=30.0,
+        allow_reentry=True
     )
 
-    job.run_daily(update_bus_data, datetime.time(19))
-    #job.run_repeating(serviceUpdate, interval=900, first=0)
+    job.run_daily(update_bus_data, time(19))
 
-    dispatcher.add_handler(settings_handler)
     dispatcher.add_handler(location_handler)
-    dispatcher.add_handler(refresh_handler)
-    dispatcher.add_handler(busService_handler)
     dispatcher.add_handler(command_handler)
+    dispatcher.add_handler(settings_handler)
+    dispatcher.add_handler(bus_service_handler)
     dispatcher.add_handler(bus_handler)
+    dispatcher.add_handler(refresh_handler)
     dispatcher.add_handler(unknown_handler)
     dispatcher.add_error_handler(error_callback)
 
     updater.start_polling(timeout=30)
     updater.idle()
+
 
 if __name__ == '__main__':
     main()
