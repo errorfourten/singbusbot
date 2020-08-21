@@ -42,15 +42,18 @@ job = updater.job_queue
 dispatcher = updater.dispatcher
 conn = psycopg2.connect(DATABASE_CREDENTIALS)
 
+
 ####################
 # HELPER FUNCTIONS #
 ####################
+
 
 # Adds a Filter to filter out the telegram TimedOut Errors
 class TimedOutFilter(logging.Filter):
     def filter(self, record):
         if "Error while getting Updates: Timed out" in record.getMessage():
             return False
+
 
 def _escape_markdown(message):
     markdownv2_escape = {
@@ -61,9 +64,11 @@ def _escape_markdown(message):
     }
     return message.translate(str.maketrans(markdownv2_escape))
 
-def update_bus_data(update, context):
+
+def update_bus_data(_, __):
     updateBusData.main()
     logging.info("Updated Bus Data")
+
 
 def broadcast_message(bot, text):
     cur = conn.cursor()
@@ -78,8 +83,10 @@ def broadcast_message(bot, text):
     cur.close()
     logging.info("Broadcast complete")
 
+
 def send_message_to_owner(bot, message):
     bot.send_message(user_id=OWNER_ID, text=message)
+
 
 def fetch_user_favourites(user_id):
     """
@@ -99,6 +106,7 @@ def fetch_user_favourites(user_id):
 
     cur.close()
     return favourites
+
 
 def generate_reply_keyboard(favourites):
     """
@@ -122,9 +130,11 @@ def generate_reply_keyboard(favourites):
     reply_keyboard.append([telegram.KeyboardButton(text="Bus Stops Near Me", request_location=True)])
     return reply_keyboard
 
+
 ##################
 # MAIN FUNCTIONS #
 ##################
+
 
 def commands(update, context):
     cur = conn.cursor()
@@ -155,6 +165,7 @@ def commands(update, context):
     logging.info(f"Command: {user.first_name} [{user.username}] ({user.id}), {message}")
     update.message.reply_text(text=reply_text, reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
 
+
 def check_valid_favourite(message):
     """
     Checks if the passed bus stop is a favourite bus stop
@@ -180,6 +191,7 @@ def check_valid_favourite(message):
 
     cur.close()
     return text
+
 
 def check_valid_bus_stop(message):
     """
@@ -209,6 +221,7 @@ def check_valid_bus_stop(message):
 
     return False, False
 
+
 def get_next_bus_time(service):
     """
     Processes the API call for the next 2 bus timings.
@@ -233,11 +246,13 @@ def get_next_bus_time(service):
 
     # Get following bus timing
     try:
-        following_bus_time = datetime.strptime(service["NextBus2"]["EstimatedArrival"].split("+")[0], "%Y-%m-%dT%H:%M:%S")
+        following_bus_time = datetime.strptime(service["NextBus2"]["EstimatedArrival"].split("+")[0],
+                                               "%Y-%m-%dT%H:%M:%S")
         time_following_left = str(following_bus_time - current_time).split(":")[1]
         return time_left, time_following_left
     except ValueError:
         return time_left, "NA"
+
 
 def create_bus_timing_message(bus_stop_code, bus_stop_name):
     """
@@ -280,7 +295,8 @@ def create_bus_timing_message(bus_stop_code, bus_stop_name):
 
     return text
 
-def send_bus_timings(update, context):
+
+def send_bus_timings(update, _):
     # Assign message variable depending on request type
     if update.callback_query:
         message = update.effective_message.text.split()[0]
@@ -320,7 +336,8 @@ def send_bus_timings(update, context):
         logging.info(f"Request: {user.first_name} [{user.username}] ({user.id}), {message}")
         update.message.reply_markdown_v2(text=text, reply_markup=reply_markup)
 
-def send_location_timing(update, context):
+
+def send_location_timing(update, _):
     user = update.message.from_user
     location = (update.message.location.latitude, update.message.location.longitude)
     with open("busStop.txt", "rb") as afile:
@@ -353,10 +370,12 @@ class FilterBusService(BaseFilter):
         with open("busServiceNo.txt", "rb") as afile:
             bus_service_no = pickle.load(afile)
         return message.text.upper() in bus_service_no
-bus_service_filter = FilterBusService()
 
+
+bus_service_filter = FilterBusService()
 # ConversationHandler for bus services
 SEND_BUS_SERVICE = map(chr, range(1))
+
 
 def ask_bus_route(update, context):
     # Takes in bus service and outputs direction, waiting for user's confirmation
@@ -384,8 +403,10 @@ def ask_bus_route(update, context):
 
     return SEND_BUS_SERVICE
 
+
 def bot_send_typing(context):
     context.bot.send_chat_action(chat_id=context.job.context, action="typing", timeout=30)
+
 
 def send_bus_route(update, context):  # Once user has replied with direction, output the arrival timings
     reply = update.message.text
@@ -433,27 +454,31 @@ def send_bus_route(update, context):  # Once user has replied with direction, ou
 
         job_send_typing.schedule_removal()
         message = _escape_markdown(message)
-        update.message.reply_markdown_v2(message, reply_markup=ReplyKeyboardMarkup(reply_keyboard), resize_keyboard=True)
+        update.message.reply_markdown_v2(message, reply_markup=ReplyKeyboardMarkup(reply_keyboard),
+                                         resize_keyboard=True)
         logging.info(f"Service Request: {user.first_name} [{user.username}] ({user.username}), {header}")
 
     else:
         job_send_typing.schedule_removal()
         update.message.reply_markdown_v2("Invalid direction", reply_markup=ReplyKeyboardMarkup(reply_keyboard),
-                                        resize_keyboard=True)
+                                         resize_keyboard=True)
         logging.info(f"Invalid direction: {user.first_name} [{user.username}] ({user.username}), {reply}")
 
     context.user_data.clear()
     return ConversationHandler.END
 
+
 ####################
 # SETTINGS HANDLER #
 ####################
 
+
 # Initialise some variables for the service ConversationHandler function
 SETTINGS, RE_SETTINGS, CANCEL, ADD_FAVOURITE, ADD_FAVOURITE_CODE, ADD_FAVOURITE_NAME, \
-CONFIRM_ADD_FAVOURITE, REMOVE_FAVOURITE, CHECK_REMOVE_FAVOURITE, CONFIRM_REMOVE_FAVOURITE = map(chr, range(2, 12))
+    CONFIRM_ADD_FAVOURITE, REMOVE_FAVOURITE, CHECK_REMOVE_FAVOURITE, CONFIRM_REMOVE_FAVOURITE = map(chr, range(2, 12))
 
-def settings(update, context):
+
+def settings(update, _):
     user = update.effective_user
     logging.info(f"Accessing settings: {user.first_name} [{user.username}] ({user.id})")
     favourites = fetch_user_favourites(user.id)
@@ -463,18 +488,19 @@ def settings(update, context):
         buttons = [[
             InlineKeyboardButton(text='Add Favourite', callback_data=str(ADD_FAVOURITE)),
             InlineKeyboardButton(text='Remove Favourite', callback_data=str(REMOVE_FAVOURITE))
-        ],[
+        ], [
             InlineKeyboardButton(text='Cancel', callback_data=str(CANCEL))
         ]]
     else:
         buttons = [[
             InlineKeyboardButton(text='Add Favourite', callback_data=str(ADD_FAVOURITE))
-        ],[
+        ], [
             InlineKeyboardButton(text='Cancel', callback_data=str(CANCEL))
         ]]
 
     update.message.reply_text("What would you like to do?", reply_markup=InlineKeyboardMarkup(buttons))
     return SETTINGS
+
 
 def add_favourite(update, context):
     context.user_data.clear()
@@ -487,6 +513,7 @@ def add_favourite(update, context):
         update.message.reply_text("Please enter a bus stop code")
 
     return ADD_FAVOURITE_CODE
+
 
 def choose_favourite_stop(update, context):
     message = update.message.text
@@ -509,6 +536,7 @@ def choose_favourite_stop(update, context):
         update.message.reply_text(f"What would you like to name: {bus_stop_code} - {bus_stop_name}?")
         return ADD_FAVOURITE_NAME
 
+
 # Asks user to confirm favourite
 def choose_favourite_name(update, context):
     favourites = fetch_user_favourites(update.effective_user.id)
@@ -530,6 +558,7 @@ def choose_favourite_name(update, context):
     update.message.reply_text(reply_message, reply_markup=InlineKeyboardMarkup(buttons))
     return CONFIRM_ADD_FAVOURITE
 
+
 # Adds favourite into database
 def confirm_add_favourite(update, context):
     user = update.effective_user
@@ -550,7 +579,7 @@ def confirm_add_favourite(update, context):
     reply_keyboard = generate_reply_keyboard(favourites)
     update.effective_message.edit_text(context.user_data["previous_message"])
     update.effective_message.reply_text("Added favourite bus stop!",
-                              reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+                                        reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
     logging.info("Added New Favourite: %s [%s] (%s)", user.first_name, user.username, user.id)
     context.user_data.clear()
 
@@ -565,6 +594,7 @@ def confirm_add_favourite(update, context):
 
     return ConversationHandler.END
 
+
 def remove_favourite(update, context):
     update.callback_query.answer()
     context.user_data.clear()
@@ -576,8 +606,9 @@ def remove_favourite(update, context):
 
     update.callback_query.message.edit_text("What would you like to do?")
     update.callback_query.message.reply_text("What bus stop would you like to remove?",
-                              reply_markup=ReplyKeyboardMarkup(reply_keyboard))
+                                             reply_markup=ReplyKeyboardMarkup(reply_keyboard))
     return CHECK_REMOVE_FAVOURITE
+
 
 # Asks user to confirm removing bus stop
 def check_remove_favourite(update, context):
@@ -603,6 +634,7 @@ def check_remove_favourite(update, context):
 
     return CONFIRM_REMOVE_FAVOURITE
 
+
 def confirm_remove_favourite(update, context):
     user = update.effective_user
 
@@ -621,7 +653,7 @@ def confirm_remove_favourite(update, context):
     logging.info("Removed favourite: %s [%s] (%s)", user.first_name, user.username, user.id)
     update.effective_message.edit_text(context.user_data["previous_message"])
     update.effective_message.reply_text("Removed favourite bus stop!",
-                              reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+                                        reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
 
     context.user_data.clear()
 
@@ -645,9 +677,11 @@ def confirm_remove_favourite(update, context):
 
     return ConversationHandler.END
 
+
 #########################################
 # CONVERSATION HANDLER HELPER FUNCTIONS #
 #########################################
+
 
 # Allows user to quit at anytime
 def cancel(update, context):
@@ -662,23 +696,27 @@ def cancel(update, context):
     context.user_data.clear()
     return ConversationHandler.END
 
+
 def timeout(update, context):
     favourites = fetch_user_favourites(update.effective_user.id)
     reply_keyboard = generate_reply_keyboard(favourites)
     context.user_data.clear()
 
     update.effective_message.reply_text("Operated timed out. Please try again",
-                              reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+                                        reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
     return ConversationHandler.TIMEOUT
 
-def waiting(update, context):
+
+def waiting(update, _):
     update.message.reply_text(text="Still processing the last request... Please wait a while.")
     return ConversationHandler.WAITING
 
-def unknown(update, context):
+
+def unknown(update, _):
     update.message.reply_text(text="Please enter a valid command")
     logging.info("Invalid command: %s [%s] (%s)", update.message.from_user.first_name,
                  update.message.from_user.username, update.message.from_user.id)
+
 
 def error_callback(update, context):
     if context.error == TimedOut:
@@ -691,11 +729,13 @@ def error_callback(update, context):
         logging.warning('Update "%s" caused error "%s"', update, context.error)
         raise context.error
 
+
 def main():
     # Create users table for initial setup
     cur = conn.cursor()
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS user_data(user_id TEXT, username TEXT, first_name TEXT, favourite TEXT, state int, PRIMARY KEY (user_id));")
+        "CREATE TABLE IF NOT EXISTS user_data(user_id TEXT, username TEXT, first_name TEXT, favourite TEXT, state int, "
+        "PRIMARY KEY (user_id));")
     conn.commit()
     cur.close()
 
