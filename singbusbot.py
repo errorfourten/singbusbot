@@ -9,6 +9,7 @@ import psycopg2
 
 import updateBusData
 import telegramCommands
+from one_map_utils import *
 from telegram import *
 from telegram.ext import *
 from telegram.error import TimedOut
@@ -337,9 +338,10 @@ def send_bus_timings(update, _):
         update.message.reply_markdown_v2(text=text, reply_markup=reply_markup)
 
 
-def send_location_timing(update, _):
+def send_location_timing(update):
     user = update.message.from_user
     location = (update.message.location.latitude, update.message.location.longitude)
+
     with open("busStop.txt", "rb") as afile:
         bus_stop_db = pickle.load(afile)
 
@@ -466,6 +468,50 @@ def send_bus_route(update, context):  # Once user has replied with direction, ou
 
     context.user_data.clear()
     return ConversationHandler.END
+
+
+###############
+# ONE MAP API #
+###############
+
+def search_postal(update, context):
+    user = update.effective_user
+    pjson = search_one_map(update.effective_message.text)
+
+    if pjson['found'] == 0:
+        update.message.reply_text("Invalid postal code. Please try again")
+        logging.info(f"Invalid postal code: {user.first_name} [{user.username}] ({user.username}), "
+                     f"{update.effective_message.text}")
+    else:
+        lat = float(pjson['results'][0]['LATITUDE'])
+        long = float(pjson['results'][0]['LONGITUDE'])
+        location = (lat, long)
+
+        with open("busStop.txt", "rb") as afile:
+            bus_stop_db = pickle.load(afile)
+
+        text = f"📍 *Postal Code: {update.effective_message.text}*\n\n"
+        tree = spatial.KDTree(bus_stop_db[1])
+        index = tree.query(location, k=5)
+        points_to_draw = [f'[{lat}, {long}, "255,0,0"]']
+
+        for x in range(len(index[1])):
+            bus_stop_code = bus_stop_db[0][index[1][x]][0]
+            bus_stop_name = bus_stop_db[0][index[1][x]][1]
+            bus_stop_lat = bus_stop_db[1][index[1][x]][0]
+            bus_stop_long = bus_stop_db[1][index[1][x]][1]
+
+            points_to_draw.append(f'[{bus_stop_lat}, {bus_stop_long}, "255,255,255", "{x+1}"]')
+
+            text += create_bus_timing_message(bus_stop_code, bus_stop_name)
+            text += "\n"
+
+        points = "|".join(points_to_draw)
+        photo = get_one_map_map(lat, long, points)
+        text = _escape_markdown(text)
+
+        logging.info(f"Postal Code: {user.first_name} [{user.username}] ({user.id}), {location}")
+        update.message.reply_photo(photo, caption=text, parse_mode="MarkdownV2")
 
 
 ####################
@@ -745,6 +791,7 @@ def main():
 
     command_handler = CommandHandler(['start', 'help', 'about', 'feedback', 'broadcast', 'stop'], commands)
     refresh_handler = CallbackQueryHandler(send_bus_timings, pattern='Refresh')
+    search_postal_handler = MessageHandler(Filters.regex('\d{6}'), search_postal)
     bus_handler = MessageHandler(Filters.text, send_bus_timings)
     location_handler = MessageHandler(Filters.location, send_location_timing)
     unknown_handler = MessageHandler(Filters.all, unknown)
@@ -820,6 +867,7 @@ def main():
     dispatcher.add_handler(location_handler)
     dispatcher.add_handler(command_handler)
     dispatcher.add_handler(settings_handler)
+    dispatcher.add_handler(search_postal_handler)
     dispatcher.add_handler(bus_service_handler)
     dispatcher.add_handler(bus_handler)
     dispatcher.add_handler(refresh_handler)
