@@ -65,7 +65,7 @@ def _escape_markdown(message):
     return message.translate(str.maketrans(markdownv2_escape))
 
 
-def update_bus_data(_, __):
+def update_bus_data(_):
     updateBusData.main()
     logging.info("Updated Bus Data")
 
