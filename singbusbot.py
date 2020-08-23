@@ -481,44 +481,52 @@ def send_bus_route(update, context):  # Once user has replied with direction, ou
 ###############
 
 
-def search_postal(update, _):
+def search_location_or_postal(update, _):
     user = update.effective_user
-    pjson = search_one_map(update.effective_message.text)
 
-    if pjson['found'] == 0:
-        update.message.reply_text("Invalid postal code. Please try again")
-        logging.info(f"Invalid postal code: {user.first_name} [{user.username}] ({user.username}), "
-                     f"{update.effective_message.text}")
-    else:
-        lat = float(pjson['results'][0]['LATITUDE'])
-        long = float(pjson['results'][0]['LONGITUDE'])
-        location = (lat, long)
+    if update.message.location:
+        lat = update.message.location.latitude
+        long = update.message.location.longitude
+        text = (lat, long)
+    else:   # If it's a postal code search
+        pjson = search_one_map(update.effective_message.text)
+        if pjson['found'] == 0:
+            update.message.reply_text("Invalid postal code. Please try again")
+            logging.info(f"Invalid postal code: {user.first_name} [{user.username}] ({user.username}), "
+                         f"{update.effective_message.text}")
+            return
+        else:
+            lat = float(pjson['results'][0]['LATITUDE'])
+            long = float(pjson['results'][0]['LONGITUDE'])
+            text = update.effective_message.text
 
-        with open("busStop.txt", "rb") as afile:
-            bus_stop_db = pickle.load(afile)
+    location = (lat, long)
 
-        tree = spatial.KDTree(bus_stop_db[1])
-        index = tree.query(location, k=5)
-        points_to_draw = [f'[{lat}, {long}, "255,0,0"]']
+    with open("busStop.txt", "rb") as afile:
+        bus_stop_db = pickle.load(afile)
 
-        buttons = []
+    tree = spatial.KDTree(bus_stop_db[1])
+    index = tree.query(location, k=5)
+    points_to_draw = [f'[{lat}, {long}, "255,0,0"]']
 
-        for x in range(len(index[1])):
-            bus_stop_code = bus_stop_db[0][index[1][x]][0]
-            bus_stop_name = bus_stop_db[0][index[1][x]][1]
-            bus_stop_lat = bus_stop_db[1][index[1][x]][0]
-            bus_stop_long = bus_stop_db[1][index[1][x]][1]
+    buttons = []
 
-            # chr converts the index to capital letters
-            points_to_draw.append(f'[{bus_stop_lat}, {bus_stop_long}, "255,255,255", "{chr(x+65)}"]')
-            buttons.append([InlineKeyboardButton(text=f'{chr(x+65)}: {bus_stop_code} - {bus_stop_name}',
-                                                 callback_data=bus_stop_code)])
+    for x in range(len(index[1])):
+        bus_stop_code = bus_stop_db[0][index[1][x]][0]
+        bus_stop_name = bus_stop_db[0][index[1][x]][1]
+        bus_stop_lat = bus_stop_db[1][index[1][x]][0]
+        bus_stop_long = bus_stop_db[1][index[1][x]][1]
 
-        points = "|".join(points_to_draw)
-        photo = get_one_map_map(lat, long, points)
+        # chr converts the index to capital letters
+        points_to_draw.append(f'[{bus_stop_lat}, {bus_stop_long}, "255,255,255", "{chr(x+65)}"]')
+        buttons.append([InlineKeyboardButton(text=f'{chr(x+65)}: {bus_stop_code} - {bus_stop_name}',
+                                             callback_data=bus_stop_code)])
 
-        logging.info(f"Postal Code: {user.first_name} [{user.username}] ({user.id}), {update.message.text}")
-        update.message.reply_photo(photo, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(buttons))
+    points = "|".join(points_to_draw)
+    photo = get_one_map_map(lat, long, points)
+
+    logging.info(f"Location: {user.first_name} [{user.username}] ({user.id}), {text}")
+    update.message.reply_photo(photo, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(buttons))
 
 
 ####################
@@ -798,10 +806,10 @@ def main():
 
     command_handler = CommandHandler(['start', 'help', 'about', 'feedback', 'broadcast', 'stop'], commands)
     refresh_handler = CallbackQueryHandler(send_bus_timings, pattern='Refresh')
-    search_postal_handler = MessageHandler(Filters.regex('\d{6}'), search_postal)
+    search_location_or_postal_handler = MessageHandler(Filters.regex('\d{6}') | Filters.location,
+                                                       search_location_or_postal)
     bus_handler = MessageHandler(Filters.text, send_bus_timings)
     bus_postal_handler = CallbackQueryHandler(send_bus_timings, pattern='\d{5}')
-    location_handler = MessageHandler(Filters.location, search_location)
     unknown_handler = MessageHandler(Filters.all, unknown)
 
     bus_service_handler = ConversationHandler(
@@ -872,10 +880,9 @@ def main():
 
     job.run_daily(update_bus_data, time(19))
 
-    dispatcher.add_handler(location_handler)
     dispatcher.add_handler(command_handler)
     dispatcher.add_handler(settings_handler)
-    dispatcher.add_handler(search_postal_handler)
+    dispatcher.add_handler(search_location_or_postal_handler)
     dispatcher.add_handler(bus_service_handler)
     dispatcher.add_handler(bus_handler)
     dispatcher.add_handler(bus_postal_handler)
