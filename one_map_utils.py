@@ -47,6 +47,18 @@ def search_one_map(query, page_num=0):
 
 
 def get_one_map_map(lat, long, points, layerchosen='default', zoom=17, width=512, height=512):
+    """
+    Given the params, create a map using One Map
+
+    :param lat: Latitude of center of map
+    :param long: Longitude of center of map
+    :param points: Points to place pins
+    :param layerchosen: Style of map
+    :param zoom: Zoom of map
+    :param width: Width of map
+    :param height: Height of map
+    :return: urllib3 object
+    """
     url = 'https://developers.onemap.sg/commonapi/staticmap/getStaticImage'
     params = {
         "layerchosen": layerchosen,

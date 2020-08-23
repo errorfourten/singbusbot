@@ -13,7 +13,8 @@ def check_commands(bot, message):
     elif message[0] == "/about":
         return "<b>About Page</b>" \
                "\nThank you for using SingBusBot." \
-               "\nAll real-time data is provided by the Land Transport Authority and new ideas are always welcome."
+               "\nAll real-time data is provided by the Land Transport Authority, map data is provided by OneMap " \
+               "and new ideas are always welcome."
     elif message[0] == "/start":
         return "Welcome to Singapore Bus Bot! Just enter a bus stop code or bus number to find the next bus. " \
                "For example, try entering 53009 or Bishan Int or 284.\n\n" \
