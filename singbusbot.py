@@ -9,6 +9,7 @@ import psycopg2
 
 import updateBusData
 import telegramCommands
+from one_map_utils import *
 from telegram import *
 from telegram.ext import *
 from telegram.error import TimedOut
@@ -299,11 +300,14 @@ def create_bus_timing_message(bus_stop_code, bus_stop_name):
 def send_bus_timings(update, _):
     # Assign message variable depending on request type
     if update.callback_query:
-        message = update.effective_message.text.split()[0]
-        user = update.effective_user
+        if update.callback_query.data == 'Refresh':
+            message = update.effective_message.text.split()[0]
+        elif update.callback_query.data:    # Elif the callback_query is a bus stop code
+            message = update.callback_query.data
     else:  # Check if it exists in user's favourites
         message = check_valid_favourite(update.message)
-        user = update.message.from_user
+
+    user = update.effective_user
 
     # Call function and assign to variables
     bus_stop_code, bus_stop_name = check_valid_bus_stop(message)
@@ -323,8 +327,8 @@ def send_bus_timings(update, _):
     ]
     reply_markup = InlineKeyboardMarkup(button_list)
 
-    # If it's a callback function,
-    if update.callback_query:
+    # If it's a callback function for refreshing,
+    if update.callback_query.data == 'Refresh':
         # Reply to the user and log it
         text += f"\n_Last Refreshed: {(datetime.utcnow() + timedelta(hours=8)).strftime('%H:%M:%S')}_"
         logging.info(f"Refresh: {user.first_name} [{user.username}] ({user.id}), {message}")
@@ -334,12 +338,16 @@ def send_bus_timings(update, _):
     # Else, send a new message
     else:
         logging.info(f"Request: {user.first_name} [{user.username}] ({user.id}), {message}")
-        update.message.reply_markdown_v2(text=text, reply_markup=reply_markup)
+        update.effective_message.reply_markdown_v2(text=text, reply_markup=reply_markup)
+
+        if update.callback_query:
+            update.callback_query.answer()
 
 
-def send_location_timing(update, _):
+def search_location(update):
     user = update.message.from_user
     location = (update.message.location.latitude, update.message.location.longitude)
+
     with open("busStop.txt", "rb") as afile:
         bus_stop_db = pickle.load(afile)
 
@@ -466,6 +474,51 @@ def send_bus_route(update, context):  # Once user has replied with direction, ou
 
     context.user_data.clear()
     return ConversationHandler.END
+
+
+###############
+# ONE MAP API #
+###############
+
+
+def search_postal(update, _):
+    user = update.effective_user
+    pjson = search_one_map(update.effective_message.text)
+
+    if pjson['found'] == 0:
+        update.message.reply_text("Invalid postal code. Please try again")
+        logging.info(f"Invalid postal code: {user.first_name} [{user.username}] ({user.username}), "
+                     f"{update.effective_message.text}")
+    else:
+        lat = float(pjson['results'][0]['LATITUDE'])
+        long = float(pjson['results'][0]['LONGITUDE'])
+        location = (lat, long)
+
+        with open("busStop.txt", "rb") as afile:
+            bus_stop_db = pickle.load(afile)
+
+        tree = spatial.KDTree(bus_stop_db[1])
+        index = tree.query(location, k=5)
+        points_to_draw = [f'[{lat}, {long}, "255,0,0"]']
+
+        buttons = []
+
+        for x in range(len(index[1])):
+            bus_stop_code = bus_stop_db[0][index[1][x]][0]
+            bus_stop_name = bus_stop_db[0][index[1][x]][1]
+            bus_stop_lat = bus_stop_db[1][index[1][x]][0]
+            bus_stop_long = bus_stop_db[1][index[1][x]][1]
+
+            # chr converts the index to capital letters
+            points_to_draw.append(f'[{bus_stop_lat}, {bus_stop_long}, "255,255,255", "{chr(x+65)}"]')
+            buttons.append([InlineKeyboardButton(text=f'{chr(x+65)}: {bus_stop_code} - {bus_stop_name}',
+                                                 callback_data=bus_stop_code)])
+
+        points = "|".join(points_to_draw)
+        photo = get_one_map_map(lat, long, points)
+
+        logging.info(f"Postal Code: {user.first_name} [{user.username}] ({user.id}), {update.message.text}")
+        update.message.reply_photo(photo, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(buttons))
 
 
 ####################
@@ -745,8 +798,10 @@ def main():
 
     command_handler = CommandHandler(['start', 'help', 'about', 'feedback', 'broadcast', 'stop'], commands)
     refresh_handler = CallbackQueryHandler(send_bus_timings, pattern='Refresh')
+    search_postal_handler = MessageHandler(Filters.regex('\d{6}'), search_postal)
     bus_handler = MessageHandler(Filters.text, send_bus_timings)
-    location_handler = MessageHandler(Filters.location, send_location_timing)
+    bus_postal_handler = CallbackQueryHandler(send_bus_timings, pattern='\d{5}')
+    location_handler = MessageHandler(Filters.location, search_location)
     unknown_handler = MessageHandler(Filters.all, unknown)
 
     bus_service_handler = ConversationHandler(
@@ -820,8 +875,10 @@ def main():
     dispatcher.add_handler(location_handler)
     dispatcher.add_handler(command_handler)
     dispatcher.add_handler(settings_handler)
+    dispatcher.add_handler(search_postal_handler)
     dispatcher.add_handler(bus_service_handler)
     dispatcher.add_handler(bus_handler)
+    dispatcher.add_handler(bus_postal_handler)
     dispatcher.add_handler(refresh_handler)
     dispatcher.add_handler(unknown_handler)
     dispatcher.add_error_handler(error_callback)
