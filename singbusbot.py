@@ -54,6 +54,20 @@ class TimedOutFilter(logging.Filter):
     def filter(self, record):
         if "Error while getting Updates: Timed out" in record.getMessage():
             return False
+        else:
+            return True
+
+
+class APSchedulerFilter(logging.Filter):
+    def filter(self, record):
+        if "_trigger_timeout" in record.getMessage():
+            return False
+        elif "bot_send_typing" in record.getMessage():
+            return False
+        elif "Removed job" in record.getMessage():
+            return False
+        else:
+            return True
 
 
 def _escape_markdown(message):
@@ -328,7 +342,7 @@ def send_bus_timings(update, _):
     reply_markup = InlineKeyboardMarkup(button_list)
 
     # If it's a callback function for refreshing,
-    if update.callback_query.data == 'Refresh':
+    if update.callback_query and update.callback_query.data == 'Refresh':
         # Reply to the user and log it
         text += f"\n_Last Refreshed: {(datetime.utcnow() + timedelta(hours=8)).strftime('%H:%M:%S')}_"
         logging.info(f"Refresh: {user.first_name} [{user.username}] ({user.id}), {message}")
@@ -371,7 +385,7 @@ def search_location(update):
 #####################
 
 # Create a new telegram filter, filter out bus Services
-class FilterBusService(BaseFilter):
+class FilterBusService(MessageFilter):
     def filter(self, message):
         if not message.text:    # Handles non-message entities to prevent errors
             return False
@@ -463,7 +477,7 @@ def send_bus_route(update, context):  # Once user has replied with direction, ou
         job_send_typing.schedule_removal()
         message = _escape_markdown(message)
         update.message.reply_markdown_v2(message, reply_markup=ReplyKeyboardMarkup(reply_keyboard),
-                                         resize_keyboard=True)
+                                         api_kwargs={'resize_keyboard': True})
         logging.info(f"Service Request: {user.first_name} [{user.username}] ({user.username}), {header}")
 
     else:
@@ -653,7 +667,7 @@ def confirm_add_favourite(update, context):
     update.effective_message.reply_text("Is there anything else you would like to do?",
                                         reply_markup=InlineKeyboardMarkup(buttons))
 
-    return ConversationHandler.END
+    return SETTINGS
 
 
 def remove_favourite(update, context):
@@ -736,7 +750,7 @@ def confirm_remove_favourite(update, context):
     update.effective_message.reply_text("Is there anything else you would like to do?",
                                         reply_markup=InlineKeyboardMarkup(buttons))
 
-    return ConversationHandler.END
+    return SETTINGS
 
 
 #########################################
@@ -750,11 +764,15 @@ def cancel(update, context):
     favourites = fetch_user_favourites(update.effective_user.id)
     reply_keyboard = generate_reply_keyboard(favourites)
 
+    if update.effective_message.reply_markup:   # Removes any inline keyboard if applicable
+        update.effective_message.edit_text(update.effective_message.text)
+
     update.effective_message.reply_text("Cancelled",
                                         reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
     if update.callback_query:
         update.callback_query.answer()
     context.user_data.clear()
+
     return ConversationHandler.END
 
 
@@ -800,9 +818,14 @@ def main():
     conn.commit()
     cur.close()
 
-    telegram_logger = logging.getLogger('telegram.ext.updater')
+    # Logging configurations
     logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+    telegram_logger = logging.getLogger('telegram.ext.updater')
     telegram_logger.addFilter(TimedOutFilter())
+    apscheduler_logger = logging.getLogger('apscheduler.scheduler')
+    apscheduler_logger.addFilter(APSchedulerFilter())
+    apexecuter_logger = logging.getLogger('apscheduler.executors.default')
+    apexecuter_logger.addFilter(APSchedulerFilter())
 
     command_handler = CommandHandler(['start', 'help', 'about', 'feedback', 'broadcast', 'stop'], commands)
     refresh_handler = CallbackQueryHandler(send_bus_timings, pattern='Refresh')
@@ -821,7 +844,7 @@ def main():
         },
 
         fallbacks=[CommandHandler('cancel', cancel)],
-        conversation_timeout=30.0
+        conversation_timeout=30
     )
 
     add_favourite_handler = ConversationHandler(
@@ -837,10 +860,11 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)],
 
         map_to_parent={
+            SETTINGS: SETTINGS,
             ConversationHandler.TIMEOUT: ConversationHandler.TIMEOUT,
-            ConversationHandler.END: SETTINGS
+            ConversationHandler.END: ConversationHandler.END
         },
-        conversation_timeout=30.0
+        conversation_timeout=30
     )
 
     remove_favourite_handler = ConversationHandler(
@@ -855,10 +879,11 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)],
 
         map_to_parent={
+            SETTINGS: SETTINGS,
             ConversationHandler.TIMEOUT: ConversationHandler.TIMEOUT,
-            ConversationHandler.END: SETTINGS,
+            ConversationHandler.END: ConversationHandler.END
         },
-        conversation_timeout=30.0
+        conversation_timeout=30
     )
 
     settings_handler = ConversationHandler(
@@ -874,7 +899,7 @@ def main():
         },
 
         fallbacks=[CommandHandler('cancel', cancel)],
-        conversation_timeout=30.0,
+        conversation_timeout=30,
         allow_reentry=True
     )
 
