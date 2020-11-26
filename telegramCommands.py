@@ -4,14 +4,14 @@ from singbusbot import send_message_to_owner
 def check_commands(bot, message):
     message = message.split(" ")
     if message[0] == "/help":
-        return "<b>Help Menu</b>\n" \
+        return "*Help Menu*\n" \
                "/help - For a list of commands\n" \
                "/settings - To add favourite bus stops\n" \
                "/about - About page\n" \
                "/feedback - Send feedback straight to the developer by using this format - /feedback [text]\n" \
                "/stop - Stops the bot"
     elif message[0] == "/about":
-        return "<b>About Page</b>" \
+        return "*About Page*" \
                "\nThank you for using SingBusBot." \
                "\nAll real-time data is provided by the Land Transport Authority, map data is provided by OneMap " \
                "and new ideas are always welcome."

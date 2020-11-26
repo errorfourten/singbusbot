@@ -92,7 +92,7 @@ def broadcast_message(bot, text):
     for x in row:
         chat_id = json.loads(x[0])
         try:  # Try to send a message to the user. If the user has blocked the bot, just skip
-            bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+            bot.send_message(chat_id=chat_id, text=text, parse_mode="MarkdownV2")
         except:     # TODO: Change this except clause to a more specific one
             pass
     cur.close()
@@ -178,7 +178,8 @@ def commands(update, context):
     cur.close()
     # Logs and sends message
     logging.info(f"Command: {user.first_name} [{user.username}] ({user.id}), {message}")
-    update.message.reply_text(text=reply_text, reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+    update.message.reply_markdown_v2(text=reply_text,
+                                     reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
 
 
 def check_valid_favourite(message):
