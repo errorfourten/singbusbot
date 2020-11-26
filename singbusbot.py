@@ -178,6 +178,7 @@ def commands(update, context):
     cur.close()
     # Logs and sends message
     logging.info(f"Command: {user.first_name} [{user.username}] ({user.id}), {message}")
+    reply_text = _escape_markdown(reply_text)
     update.message.reply_markdown_v2(text=reply_text,
                                      reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
 
@@ -319,6 +320,8 @@ def send_bus_timings(update, _):
             message = update.effective_message.text.split()[0]
         elif update.callback_query.data:    # Elif the callback_query is a bus stop code
             message = update.callback_query.data
+        else:
+            message = ""
     else:  # Check if it exists in user's favourites
         message = check_valid_favourite(update.message)
 
@@ -326,10 +329,13 @@ def send_bus_timings(update, _):
 
     # Call function and assign to variables
     bus_stop_code, bus_stop_name = check_valid_bus_stop(message)
+    favourites = fetch_user_favourites(user.id)
+    reply_keyboard = generate_reply_keyboard(favourites)
 
     if not bus_stop_code:
         # Informs the user that bus_stop_code was invalid & logs it
-        update.message.reply_text(text="Please enter a valid bus stop code")
+        update.message.reply_text(text="Please enter a valid bus stop code",
+                                  reply_markup=ReplyKeyboardMarkup(reply_keyboard))
         logging.info(f"Invalid request: {user.first_name} [{user.username}] ({user.id}), {message}")
         return
     else:
