@@ -579,24 +579,29 @@ def settings(update, _):
 
 def add_favourite(update, context):
     context.user_data.clear()
+    buttons = [[InlineKeyboardButton(text='Back', callback_data=str(SETTINGS))]]
 
-    try:
+    if update.callback_query:
         update.callback_query.answer()
         update.callback_query.message.edit_text("What would you like to do?")
-        update.callback_query.message.reply_text("Please enter a bus stop code")
-    except AttributeError:  # When there is no callback_query to be answered
-        update.message.reply_text("Please enter a bus stop code")
+        update.callback_query.message.reply_text("Please enter a bus stop code", reply_markup=InlineKeyboardMarkup(buttons))
+    else:
+        update.message.reply_text("Please enter a bus stop code", reply_markup=InlineKeyboardMarkup(buttons))
 
     return ADD_FAVOURITE_CODE
 
 
 def choose_favourite_stop(update, context):
     message = update.message.text
+    if update.effective_message.reply_markup:   # Removes any inline keyboard if applicable
+        update.effective_message.edit_text(update.effective_message.text)
+
     bus_stop_code, bus_stop_name = check_valid_bus_stop(message)
+    buttons = [[InlineKeyboardButton(text='Back', callback_data=str(ADD_FAVOURITE))]]
 
     if bus_stop_code is False:
         # Informs the user that busStopCode was invalid & logs it
-        update.message.reply_text("Try again. Please enter a valid bus stop code")
+        update.message.reply_text("Try again. Please enter a valid bus stop code", reply_markup=InlineKeyboardMarkup(buttons))
         return ADD_FAVOURITE_CODE
 
     else:
@@ -604,27 +609,35 @@ def choose_favourite_stop(update, context):
         if favourites:
             existing_favourite_codes = list(zip(*favourites))[1]    # Takes all the 1st elements of favourites
             if bus_stop_code in existing_favourite_codes:
-                update.message.reply_text("Favourite bus stop already added. Please choose another one")
+                update.message.reply_text("Favourite bus stop already added. Please choose another one",
+                                          reply_markup=InlineKeyboardMarkup(buttons))
                 return ADD_FAVOURITE_CODE
 
         context.user_data["bus_stop_code"] = bus_stop_code
-        update.message.reply_text(f"What would you like to name: {bus_stop_code} - {bus_stop_name}?")
+        update.message.reply_text(f"What would you like to name: {bus_stop_code} - {bus_stop_name}?",
+                                  reply_markup=InlineKeyboardMarkup(buttons))
+
         return ADD_FAVOURITE_NAME
 
 
 # Asks user to confirm favourite
 def choose_favourite_name(update, context):
+    update.message.edit_text(update.message.text)
     favourites = fetch_user_favourites(update.effective_user.id)
+    buttons = [[InlineKeyboardButton(text='Back', callback_data=str(ADD_FAVOURITE_CODE))]]
+
     if favourites:
         existing_favourite_names = list(zip(*favourites))[0]  # Takes all the 0th elements of favourites
         if update.message.text in existing_favourite_names:
-            update.message.reply_text("Name already exists. Please choose another name.")
+            update.message.reply_text("Name already exists. Please choose another name.",
+                                      reply_markup=InlineKeyboardMarkup(buttons))
             return ADD_FAVOURITE_NAME
 
     context.user_data["bus_stop_name"] = update.message.text
 
     buttons = [[InlineKeyboardButton(text='Yes', callback_data='ADD_YES'),
-               InlineKeyboardButton(text='No', callback_data='ADD_NO')]]
+               InlineKeyboardButton(text='No', callback_data='ADD_NO')],
+               [InlineKeyboardButton(text='Back', callback_data=str(ADD_FAVOURITE_CODE))]]
 
     reply_message = f"Please confirm that you would like to add " \
                     f"{context.user_data['bus_stop_name']} - {context.user_data['bus_stop_code']}"
@@ -636,6 +649,7 @@ def choose_favourite_name(update, context):
 
 # Adds favourite into database
 def confirm_add_favourite(update, context):
+    update.message.edit_text(update.message.text)
     user = update.effective_user
     favourites = fetch_user_favourites(user.id)
     context.user_data["favourites"] = favourites
@@ -678,15 +692,17 @@ def remove_favourite(update, context):
     favourites = fetch_user_favourites(update.effective_user.id)
     context.user_data["favourites"] = favourites
     reply_keyboard = generate_reply_keyboard(favourites)
+    reply_keyboard.append([KeyboardButton(text='Cancel', callback_data=str(CANCEL))])
 
     update.callback_query.message.edit_text("What would you like to do?")
     update.callback_query.message.reply_text("What bus stop would you like to remove?",
-                                             reply_markup=ReplyKeyboardMarkup(reply_keyboard))
+                                             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
     return CHECK_REMOVE_FAVOURITE
 
 
 # Asks user to confirm removing bus stop
 def check_remove_favourite(update, context):
+    update.message.edit_text(update.message.text)
     favourites = context.user_data["favourites"]
     for favourite in favourites:
         if update.message.text == favourite[0]:
@@ -694,6 +710,7 @@ def check_remove_favourite(update, context):
             break
     else:
         reply_keyboard = generate_reply_keyboard(favourites)
+        reply_keyboard.append([InlineKeyboardButton(text='Cancel', callback_data=str(CANCEL))])
         update.message.reply_text("Please choose a valid favourite bus stop!",
                                   reply_markup=ReplyKeyboardMarkup(reply_keyboard))
         return REMOVE_FAVOURITE
@@ -701,7 +718,8 @@ def check_remove_favourite(update, context):
     context.user_data["remove"] = stop_to_remove
 
     buttons = [[InlineKeyboardButton(text='Yes', callback_data='REMOVE_YES'),
-                InlineKeyboardButton(text='No', callback_data='REMOVE_NO')]]
+                InlineKeyboardButton(text='No', callback_data='REMOVE_NO')],
+               [InlineKeyboardButton(text='Cancel', callback_data=str(CANCEL))]]
     reply_message = f"Are you sure you want to remove {stop_to_remove[0]} - {stop_to_remove[1]}?"
     context.user_data["previous_message"] = reply_message
 
@@ -711,6 +729,7 @@ def check_remove_favourite(update, context):
 
 
 def confirm_remove_favourite(update, context):
+    update.message.edit_text(update.message.text)
     user = update.effective_user
 
     # Inserts the new list into the database
