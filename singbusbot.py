@@ -333,11 +333,8 @@ def send_bus_timings(update, _):
     reply_keyboard = generate_reply_keyboard(favourites)
 
     if not bus_stop_code:
-        # Informs the user that bus_stop_code was invalid & logs it
-        update.message.reply_text(text="Please enter a valid bus stop code",
-                                  reply_markup=ReplyKeyboardMarkup(reply_keyboard))
-        logging.info(f"Invalid request: {user.first_name} [{user.username}] ({user.id}), {message}")
-        return
+        return search_text(_, _, update)
+
     else:
         text = create_bus_timing_message(bus_stop_code, bus_stop_name)
         text = _escape_markdown(text)
@@ -385,6 +382,52 @@ def search_location(update):
     text = _escape_markdown(text)
     logging.info(f"Location: {user.first_name} [{user.username}] ({user.id}), {location}")
     update.message.reply_markdown_v2(text=text)
+
+
+def search_text(update, _, original_update=None):
+    if not original_update:
+        update.callback_query.answer()
+        _, query, page_num = update.callback_query.data.split(":::")
+    else:
+        query = original_update.effective_message.text
+        page_num = 1
+
+    results = search_one_map(query, page_num)
+    reply_keyboard = None
+
+    num_found = results['found']
+    if num_found == 0:
+        text = f"🔍: {query}\n{num_found} results found.\nPlease try again"
+    elif num_found > 30:
+        text = f"🔍: {query}\n{num_found} results found.\nToo many results... Please try again"
+    else:
+        places = results['results']
+        button_list = []
+        # Finds number of results on current page of API
+        current_page_found = int(results['found']) - (int(results['pageNum']) - 1) * 10
+
+        for i in range(min(current_page_found, 10)):
+            callback_data = str((float(places[i]['LATITUDE']), float(places[i]['LONGITUDE'])))
+            button_list.append([InlineKeyboardButton(places[i]['SEARCHVAL'], callback_data=callback_data)])
+
+        if results['totalNumPages'] != 1:
+            if results['pageNum'] == 1:
+                button_list.append([InlineKeyboardButton(">", callback_data=f">:::{query}:::2")])
+            elif results['pageNum'] == min(int(results['totalNumPages']), 3):
+                button_list.append([InlineKeyboardButton("<", callback_data=f"<:::{query}:::{int(results['pageNum'])-1}")])
+            else:
+                button_list.append([InlineKeyboardButton("<", callback_data=f"<:::{query}:::{int(results['pageNum'])-1}"),
+                                    InlineKeyboardButton(">", callback_data=f">:::{query}:::{int(results['pageNum'])+1}")])
+
+        text = f"🔍: {query}\n{num_found} results found.\n\nPage: {page_num}/{results['totalNumPages']}"
+        reply_keyboard = InlineKeyboardMarkup(button_list)
+
+    text = _escape_markdown(text)
+
+    if not original_update:
+        update.effective_message.edit_text(text, reply_markup=reply_keyboard, parse_mode='MarkdownV2')
+    else:
+        original_update.effective_message.reply_markdown_v2(text, reply_markup=reply_keyboard)
 
 
 #####################
@@ -505,7 +548,11 @@ def send_bus_route(update, context):  # Once user has replied with direction, ou
 def search_location_or_postal(update, _):
     user = update.effective_user
 
-    if update.message.location:
+    if update.callback_query:
+        update.callback_query.answer()
+        text = eval(update.callback_query.data)
+        lat, long = text
+    elif update.effective_message.location:
         lat = update.message.location.latitude
         long = update.message.location.longitude
         text = (lat, long)
@@ -547,7 +594,7 @@ def search_location_or_postal(update, _):
     photo = get_one_map_map(lat, long, points)
 
     logging.info(f"Location: {user.first_name} [{user.username}] ({user.id}), {text}")
-    update.message.reply_photo(photo, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(buttons))
+    update.effective_message.reply_photo(photo, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(buttons))
 
 
 ####################
@@ -857,6 +904,8 @@ def main():
     refresh_handler = CallbackQueryHandler(send_bus_timings, pattern='Refresh')
     search_location_or_postal_handler = MessageHandler(Filters.regex('\d{6}') | Filters.location,
                                                        search_location_or_postal)
+    search_text_location_handler = CallbackQueryHandler(search_location_or_postal, pattern='\(\d+\.\d+, \d+\.\d+\)')
+    search_text_page_handler = CallbackQueryHandler(search_text, pattern='[<>]')
     bus_handler = MessageHandler(Filters.text, send_bus_timings)
     bus_postal_handler = CallbackQueryHandler(send_bus_timings, pattern='\d{5}')
     unknown_handler = MessageHandler(Filters.all, unknown)
@@ -934,6 +983,8 @@ def main():
     dispatcher.add_handler(command_handler)
     dispatcher.add_handler(settings_handler)
     dispatcher.add_handler(search_location_or_postal_handler)
+    dispatcher.add_handler(search_text_location_handler)
+    dispatcher.add_handler(search_text_page_handler)
     dispatcher.add_handler(bus_service_handler)
     dispatcher.add_handler(bus_handler)
     dispatcher.add_handler(bus_postal_handler)

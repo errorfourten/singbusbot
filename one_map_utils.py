@@ -25,7 +25,7 @@ def get_one_map_api_token(one_map_email, one_map_password):
     return token, expiry
 
 
-def search_one_map(query, page_num=0):
+def search_one_map(query, page_num=1):
     """
     Given a search query, return the found locations, lat and long
 
@@ -39,7 +39,7 @@ def search_one_map(query, page_num=0):
         "searchVal": query,
         "returnGeom": "Y",
         "getAddrDetails": "Y",
-        "pageNum": 1
+        "pageNum": page_num
     }
     r = requests.get(url, params=params)
     pjson = r.json()
