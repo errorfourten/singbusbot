@@ -387,7 +387,7 @@ def ask_bus_route(update, context):
         bus_service_db = pickle.load(afile)
 
     # Find the direction(s) out that bus service
-    directions = [element for element in bus_service_db if element['service_no'] == bus_number]
+    directions = [element for element in bus_service_db if element['service_no'].upper() == bus_number]
     reply_keyboard = []
 
     # Generates a reply_keyboard with the directions
