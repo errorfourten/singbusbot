@@ -368,8 +368,9 @@ class FilterBusService(BaseFilter):
         if not message.text:    # Handles non-message entities to prevent errors
             return False
         with open("busServiceNo.txt", "rb") as afile:
-            bus_service_no = pickle.load(afile)
-        return message.text.upper() in bus_service_no
+            data = pickle.load(afile)
+            bus_services = {service.upper() for service in data}
+        return message.text.upper() in bus_services
 
 
 bus_service_filter = FilterBusService()
