@@ -80,9 +80,15 @@ def _escape_markdown(message):
     return message.translate(str.maketrans(markdownv2_escape))
 
 
-def update_bus_data(_):
-    updateBusData.main()
-    logging.info("Updated Bus Data")
+def check_bus_data(_):
+    """
+    Checks if the bus data on disk is updated if not, informs the owner
+    """
+    if all(updateBusData.check_bus_data()):
+        logging.info("Bus data is up to date")
+    else:
+        logging.warning("Bus data needs to be updated")
+        send_message_to_owner(updater.bot, "WARNING: Bus data out of date")
 
 
 def broadcast_message(bot, text):
@@ -104,7 +110,7 @@ def broadcast_message(bot, text):
 
 
 def send_message_to_owner(bot, message):
-    bot.send_message(user_id=OWNER_ID, text=message)
+    bot.send_message(chat_id=OWNER_ID, text=message)
 
 
 def fetch_user_favourites(user_id):
@@ -1001,7 +1007,7 @@ def main():
         allow_reentry=True
     )
 
-    job.run_daily(update_bus_data, time(19))
+    job.run_daily(check_bus_data, time(19))
 
     dispatcher.add_handler(command_handler)
     dispatcher.add_handler(settings_handler)
