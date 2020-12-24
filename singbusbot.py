@@ -86,14 +86,18 @@ def update_bus_data(_):
 
 
 def broadcast_message(bot, text):
+    global conn
+    if conn.closed:
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
     cur = conn.cursor()
+
     cur.execute('''SELECT * FROM user_data WHERE state = 1''')
     row = cur.fetchall()
     for x in row:
         chat_id = json.loads(x[0])
         try:  # Try to send a message to the user. If the user has blocked the bot, just skip
             bot.send_message(chat_id=chat_id, text=text, parse_mode="MarkdownV2")
-        except:     # TODO: Change this except clause to a more specific one
+        except telegram.error.Unauthorized:
             pass
     cur.close()
     logging.info("Broadcast complete")
@@ -110,6 +114,9 @@ def fetch_user_favourites(user_id):
     :param user_id: Telegram User ID
     :return: List of favourite bus stops: [[Code, Saved Name],[]]
     """
+    global conn
+    if conn.closed:
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
     cur = conn.cursor()
     cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (user_id,))
     row = cur.fetchall()
@@ -152,6 +159,9 @@ def generate_reply_keyboard(favourites):
 
 
 def commands(update, context):
+    global conn
+    if conn.closed:
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
     cur = conn.cursor()
     message = update.message.text
     user = update.effective_user
@@ -191,9 +201,12 @@ def check_valid_favourite(message):
     :return: Favourite bus stop code if exists, else original message
     """
 
-    text = message.text
+    global conn
+    if conn.closed:
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
     cur = conn.cursor()
     cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (message.from_user.id,))
+    text = message.text
     row = cur.fetchall()
 
     if row:
@@ -711,6 +724,9 @@ def confirm_add_favourite(update, context):
     # Adds new favourite to the list
     favourites.append([context.user_data["bus_stop_name"], context.user_data["bus_stop_code"]])
     insert_sf = json.dumps(favourites)
+    global conn
+    if conn.closed:
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
     cur = conn.cursor()
     cur.execute(
         '''INSERT INTO user_data (user_id, username, first_name, favourite, state) VALUES ('%s', %s, %s, %s, 1)
@@ -790,6 +806,9 @@ def confirm_remove_favourite(update, context):
     context.user_data["favourites"].remove(context.user_data["remove"])
     favourites = context.user_data["favourites"]
     insert_sf = json.dumps(favourites)
+    global conn
+    if conn.closed:
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
     cur = conn.cursor()
     cur.execute('''UPDATE user_data SET favourite = %s WHERE user_id = '%s' ''',
                 (insert_sf, user.id))
@@ -873,17 +892,21 @@ def unknown(update, _):
 def error_callback(update, context):
     if context.error == TimedOut:
         return
-    elif context.error == psycopg2.InterfaceError:
+    elif context.error == "connection already closed":
+        # If the connection to the database gets closed, reconnect
         global conn
         conn = psycopg2.connect(DATABASE_CREDENTIALS)
         return
     else:
-        logging.warning('Update "%s" caused error "%s"', update, context.error)
+        logging.warning(f'Update "{update}" caused error "{context.error}"')
         raise context.error
 
 
 def main():
     # Create users table for initial setup
+    global conn
+    if conn.closed:
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
     cur = conn.cursor()
     cur.execute(
         "CREATE TABLE IF NOT EXISTS user_data(user_id TEXT, username TEXT, first_name TEXT, favourite TEXT, state int, "
