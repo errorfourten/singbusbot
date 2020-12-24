@@ -1,5 +1,5 @@
 .git
 .idea
+*.pyc
 __pycache__
 venv/
-.atomenv.json
