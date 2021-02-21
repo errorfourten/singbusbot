@@ -501,11 +501,9 @@ class FilterBusService(MessageFilter):
 
 
 bus_service_filter = FilterBusService()
-# ConversationHandler for bus services
-SEND_BUS_SERVICE = map(chr, range(1))
 
 
-def ask_bus_route(update, context):
+def ask_bus_route(update, _):
     # Takes in bus service and outputs direction, waiting for user's confirmation
     bus_number = update.message.text.upper()
     user = update.message.from_user
@@ -518,18 +516,14 @@ def ask_bus_route(update, context):
     reply_keyboard = []
 
     # Generates a reply_keyboard with the directions
-    for direction in directions:
+    for i, direction in enumerate(directions):
         bus_stop_code_start, bus_stop_name_start = check_valid_bus_stop(direction["bus_stops"][0])
         bus_stop_code_end, bus_stop_name_end = check_valid_bus_stop(direction["bus_stops"][-1])
-        reply_keyboard.append([f"{bus_stop_name_start} - {bus_stop_name_end}"])
+        reply_keyboard.append([InlineKeyboardButton(f"{bus_stop_name_start} - {bus_stop_name_end}",
+                                                    callback_data=f"BUS ROUTE:::{bus_number}:::{i}")])
 
-    context.user_data["bus_service"] = [bus_number, reply_keyboard, directions]  # Pass the generated data to user_data
-    update.message.reply_text("Which direction?",
-                              reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True,
-                                                               resize_keyboard=True, selective=True))
+    update.message.reply_text(f"🚌 Bus {bus_number}\nWhich direction?", reply_markup=InlineKeyboardMarkup(reply_keyboard))
     logging.info(f"Service Request: {user.first_name} [{user.username}] ({user.id}), {bus_number}")
-
-    return SEND_BUS_SERVICE
 
 
 def bot_send_typing(context):
@@ -537,7 +531,7 @@ def bot_send_typing(context):
 
 
 def send_bus_route(update, context):  # Once user has replied with direction, output the arrival timings
-    reply = update.message.text
+    update.callback_query.answer()
     user = update.effective_user
     job_send_typing = job.run_repeating(bot_send_typing, interval=5, first=0, context=update.effective_chat.id)
 
@@ -545,53 +539,50 @@ def send_bus_route(update, context):  # Once user has replied with direction, ou
     favourites = fetch_user_favourites(user.id)
     reply_keyboard = generate_reply_keyboard(favourites)
 
-    if [reply] in context.user_data["bus_service"][1]:  # Ensures user reply is a valid direction
-        direction = context.user_data["bus_service"][1].index([reply])  # Gets the direction in terms of a int
-        bus_number = context.user_data["bus_service"][0]
-        directions = context.user_data["bus_service"][2]
+    with open("busService.txt", "rb") as afile:
+        bus_service_db = pickle.load(afile)
 
-        header = f"Bus {str(bus_number)} ({reply})"
-        message = f"__{header}__\n"
-        flag = 0
+    _, bus_number, direction = update.callback_query.data.split(":::")
+    directions = [element for element in bus_service_db if element['service_no'] == bus_number]
+    _, bus_stop_name_start = check_valid_bus_stop(directions[int(direction)]["bus_stops"][0])
+    _, bus_stop_name_end = check_valid_bus_stop(directions[int(direction)]["bus_stops"][-1])
 
-        for bus_stop_code in directions[direction]["bus_stops"]:  # For every bus stop code in that direction
-            url = f"http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode={bus_stop_code}"
-            headers = {"AccountKey": LTA_ACCOUNT_KEY}
-            r = requests.get(url, headers=headers)
-            pjson = r.json()
+    header = f"Bus {str(bus_number)} ({bus_stop_name_start} - {bus_stop_name_end})"
+    message = f"__{header}__\n"
+    flag = 0
 
-            # Select the correct bus service from raw data
-            service = [element for element in pjson["Services"] if element['ServiceNo'] == bus_number]
-            if service:     # Get the arrival time
-                time_left, time_following_left = get_next_bus_time(service[0])
-            else:       # If there are no more buses for the day
-                time_left = "NA"
+    for bus_stop_code in directions[int(direction)]["bus_stops"]:  # For every bus stop code in that direction
+        url = f"http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode={bus_stop_code}"
+        headers = {"AccountKey": LTA_ACCOUNT_KEY}
+        r = requests.get(url, headers=headers)
+        pjson = r.json()
 
-            bus_stop_code, bus_stop_name = check_valid_bus_stop(bus_stop_code)
-            text = f"*{bus_stop_name}* ( /{bus_stop_code} )   "
-            if time_left != "NA":
-                flag = 1
-            if time_left == "00":
-                text += "Arr"
-            else:
-                text += f"{time_left} min"
-            message += text + "\n"
+        # Select the correct bus service from raw data
+        service = [element for element in pjson["Services"] if element['ServiceNo'] == bus_number]
+        if service:     # Get the arrival time
+            time_left, time_following_left = get_next_bus_time(service[0])
+        else:       # If there are no more buses for the day
+            time_left = "NA"
 
-        if flag == 0:
-            message = f"__{header}__\nNo more buses at this hour"
+        bus_stop_code, bus_stop_name = check_valid_bus_stop(bus_stop_code)
+        text = f"*{bus_stop_name}* ( /{bus_stop_code} )   "
+        if time_left != "NA":
+            flag = 1
+        if time_left == "00":
+            text += "Arr"
+        else:
+            text += f"{time_left} min"
+        message += text + "\n"
 
-        job_send_typing.schedule_removal()
-        message = _escape_markdown(message)
-        update.message.reply_markdown_v2(message, reply_markup=ReplyKeyboardMarkup(reply_keyboard),
-                                         api_kwargs={'resize_keyboard': True})
-        logging.info(f"Service Request: {user.first_name} [{user.username}] ({user.username}), {header}")
+    if flag == 0:
+        message = f"__{header}__\nNo more buses at this hour"
 
-    else:
-        job_send_typing.schedule_removal()
-        update.message.reply_markdown_v2("Invalid direction", reply_markup=ReplyKeyboardMarkup(reply_keyboard),
-                                         resize_keyboard=True)
-        logging.info(f"Invalid direction: {user.first_name} [{user.username}] ({user.username}), {reply}")
+    job_send_typing.schedule_removal()
+    message = _escape_markdown(message)
+    update.callback_query.message.reply_markdown_v2(message, reply_markup=ReplyKeyboardMarkup(reply_keyboard),
+                                                    api_kwargs={'resize_keyboard': True})
 
+    logging.info(f"Service Request: {user.first_name} [{user.username}] ({user.username}), {header}")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -974,19 +965,9 @@ def main():
     search_text_page_handler = CallbackQueryHandler(search_text, pattern='[<>]')
     bus_handler = MessageHandler(Filters.text, send_bus_timings)
     bus_postal_handler = CallbackQueryHandler(send_bus_timings, pattern='\d{5}')
+    bus_service_handler = MessageHandler(bus_service_filter, ask_bus_route)
+    bus_route_handler = CallbackQueryHandler(send_bus_route, pattern="BUS ROUTE")
     unknown_handler = MessageHandler(Filters.all, unknown)
-
-    bus_service_handler = ConversationHandler(
-        entry_points=[MessageHandler(bus_service_filter, ask_bus_route)],
-
-        states={
-            SEND_BUS_SERVICE: [MessageHandler(Filters.text, send_bus_route)],
-            ConversationHandler.TIMEOUT: [MessageHandler(Filters.all, timeout)],
-        },
-
-        fallbacks=[CommandHandler('cancel', cancel)],
-        conversation_timeout=30
-    )
 
     add_favourite_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_favourite, pattern=f'{str(ADD_FAVOURITE)}')],
@@ -1052,6 +1033,7 @@ def main():
     dispatcher.add_handler(search_text_location_handler)
     dispatcher.add_handler(search_text_page_handler)
     dispatcher.add_handler(bus_service_handler)
+    dispatcher.add_handler(bus_route_handler)
     dispatcher.add_handler(bus_handler)
     dispatcher.add_handler(bus_postal_handler)
     dispatcher.add_handler(refresh_handler)
