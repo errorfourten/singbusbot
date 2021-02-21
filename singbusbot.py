@@ -406,40 +406,77 @@ def search_location(update):
 def search_text(update, _, original_update=None):
     if not original_update:
         update.callback_query.answer()
-        _, query, page_num = update.callback_query.data.split(":::")
+        _, query, user_page_num = update.callback_query.data.split(":::")
+        user_page_num = int(user_page_num)
     else:
         query = original_update.effective_message.text
-        page_num = 1
+        user = original_update.effective_message.from_user
+        user_page_num = 1
+        logging.info(f"Search: {user.first_name} [{user.username}] ({user.id}), {query}")
 
-    results = search_one_map(query, page_num)
+    def _generate_pagination(query):
+        search_page_num, results_total = 1, 0
+        all_pages, current_page = [], []
+        places_list = set()
+
+        results = search_one_map(query, search_page_num)
+        total_num_pages, num_found = results['totalNumPages'], results['found']
+
+        while True:
+            if not results['results']:
+                # Return any possible results if they have been added
+                if results_total:
+                    return all_pages, results_total
+                # If not, there are no results for the query
+                return None, 0
+
+            for place in results['results']:
+                if place['SEARCHVAL'] not in places_list:
+                    places_list.add(place['SEARCHVAL'])
+                    callback_data = str((float(place['LATITUDE']), float(place['LONGITUDE'])))
+                    current_page.append([InlineKeyboardButton(place['SEARCHVAL'], callback_data=callback_data)])
+
+                    # Ensure that only a maximum of 30 results can be found
+                    results_total += 1
+                    if results_total > 30:
+                        return False, num_found
+
+                # Creates a new page every 10 results
+                if len(current_page) == 10:
+                    all_pages.append(current_page)
+                    current_page = []
+
+            # Returns once all results have been added
+            search_page_num += 1
+            if search_page_num > total_num_pages:
+                all_pages.append(current_page)
+                return all_pages, results_total
+
+            results = search_one_map(query, search_page_num)
+
+    pagination, num_found = _generate_pagination(query)
     reply_keyboard = None
 
-    num_found = results['found']
-    if num_found == 0:
-        text = f"🔍: {query}\n{num_found} results found.\nPlease try again"
-    elif num_found > 30:
+    if pagination is False:
         text = f"🔍: {query}\n{num_found} results found.\nToo many results... Please try again"
+    elif pagination is None:
+        text = f"🔍: {query}\nNo results found... Please try again"
     else:
-        places = results['results']
-        button_list = []
-        # Finds number of results on current page of API
-        current_page_found = int(results['found']) - (int(results['pageNum']) - 1) * 10
+        # Selects the correct page for reply keyboard, based on the user_page_num
+        reply_keyboard = pagination[user_page_num - 1]
 
-        for i in range(min(current_page_found, 10)):
-            callback_data = str((float(places[i]['LATITUDE']), float(places[i]['LONGITUDE'])))
-            button_list.append([InlineKeyboardButton(places[i]['SEARCHVAL'], callback_data=callback_data)])
-
-        if results['totalNumPages'] != 1:
-            if results['pageNum'] == 1:
-                button_list.append([InlineKeyboardButton(">", callback_data=f">:::{query}:::2")])
-            elif results['pageNum'] == min(int(results['totalNumPages']), 3):
-                button_list.append([InlineKeyboardButton("<", callback_data=f"<:::{query}:::{int(results['pageNum'])-1}")])
+        # Adds navigation buttons based on total number of pages in pagination
+        if len(pagination) != 1:
+            if user_page_num == 1:
+                reply_keyboard.append([InlineKeyboardButton(">", callback_data=f">:::{query}:::2")])
+            elif user_page_num == min(len(pagination), 3):
+                reply_keyboard.append([InlineKeyboardButton("<", callback_data=f"<:::{query}:::{user_page_num-1}")])
             else:
-                button_list.append([InlineKeyboardButton("<", callback_data=f"<:::{query}:::{int(results['pageNum'])-1}"),
-                                    InlineKeyboardButton(">", callback_data=f">:::{query}:::{int(results['pageNum'])+1}")])
+                reply_keyboard.append([InlineKeyboardButton("<", callback_data=f"<:::{query}:::{user_page_num-1}"),
+                                       InlineKeyboardButton(">", callback_data=f">:::{query}:::{user_page_num+1}")])
 
-        text = f"🔍: {query}\n{num_found} results found.\n\nPage: {page_num}/{results['totalNumPages']}"
-        reply_keyboard = InlineKeyboardMarkup(button_list)
+        text = f"🔍: {query}\n{num_found} results found.\n\nPage: {user_page_num}/{len(pagination)}"
+        reply_keyboard = InlineKeyboardMarkup(reply_keyboard)
 
     text = _escape_markdown(text)
 
