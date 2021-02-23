@@ -37,6 +37,11 @@ def check_commands(bot, message):
             return False
         else:
             return " ".join(message[1:])
+    elif message[0] == "/message":
+        if not message[1:]:
+            return False
+        else:
+            return message[1], " ".join(message[2:])
     elif message[0] == "/stop":
         return "Thank you for using SingBusBot! Please use /start to restart it anytime."
     else:
