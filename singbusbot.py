@@ -731,6 +731,9 @@ def choose_favourite_name(update, context):
         if update.message.text in existing_favourite_names:
             update.message.reply_text("Name already exists. Please choose another name.")
             return ADD_FAVOURITE_NAME
+        elif update.message.text == 'Back':
+            update.message.reply_text("Forbidden name. Please choose another name.")
+            return ADD_FAVOURITE_NAME
 
     context.user_data["bus_stop_name"] = update.message.text
 
