@@ -948,6 +948,8 @@ def error_callback(update, context):
         global conn
         conn = psycopg2.connect(DATABASE_CREDENTIALS)
         return
+    elif context.error == "Query is too old and response timeout expired or query id is invalid":
+        return
     else:
         logging.warning(f'Update "{update}" caused error "{context.error}"')
         raise context.error
