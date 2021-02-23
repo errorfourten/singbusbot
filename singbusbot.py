@@ -499,8 +499,9 @@ class FilterBusService(MessageFilter):
         if not message.text:    # Handles non-message entities to prevent errors
             return False
         with open("busServiceNo.txt", "rb") as afile:
-            bus_service_no = pickle.load(afile)
-        return message.text.upper() in bus_service_no
+            data = pickle.load(afile)
+            bus_services = {service.upper() for service in data}
+        return message.text.upper() in bus_services
 
 
 bus_service_filter = FilterBusService()
@@ -515,7 +516,7 @@ def ask_bus_route(update, _):
         bus_service_db = pickle.load(afile)
 
     # Find the direction(s) out that bus service
-    directions = [element for element in bus_service_db if element['service_no'] == bus_number]
+    directions = [element for element in bus_service_db if element['service_no'].upper() == bus_number]
     reply_keyboard = []
 
     # Generates a reply_keyboard with the directions
