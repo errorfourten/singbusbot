@@ -6,9 +6,9 @@ import os
 LTA_ACCOUNT_KEY = os.getenv("LTA_Account_Key")
 
 
-def update_bus_stop_db():
+def get_bus_stop_data():
     """
-    Gets all the bus stops from the LTA API and saves it as a DB
+    Gets all the bus stops from the LTA API and returns it in a list
 
     :return: [ [ [BusStopCode, Description], ... ], [ [Latitude, Longitude], ... ] ]
     """
@@ -25,20 +25,19 @@ def update_bus_stop_db():
         pjson = r.json()
 
         for bus_stop in pjson["value"]:
-            to_add_stop.append([bus_stop["BusStopCode"], bus_stop["Description"]])
-            to_add_gps.append([bus_stop["Latitude"], bus_stop["Longitude"]])
+            to_add_stop.append((bus_stop["BusStopCode"], bus_stop["Description"]))
+            to_add_gps.append((bus_stop["Latitude"], bus_stop["Longitude"]))
 
         pjson_len = len(pjson["value"])
         i += 1
 
-    out = [to_add_stop, to_add_gps]
-    with open("busStop.txt", "wb") as outfile:
-        pickle.dump(out, outfile)
+    data = [to_add_stop, to_add_gps]
+    return data
 
 
-def update_bus_service_db():
+def get_bus_service_data():
     """
-    Gets all the bus services from the LTA API and saves it as a DB
+    Gets all the bus services from the LTA API and returns it in a list
 
     :return: busServiceNo: Set of all the different bus numbers
     :return: busService: [{"service_no": ..., "direction": ..., "bus_stops": ...}, ...]
@@ -74,17 +73,42 @@ def update_bus_service_db():
         i += 1
 
     bus_services.append(tempdict)  # Append the very last service
+    return bus_service_nos, bus_services
 
+
+def check_bus_data():
+    """
+    Checks saved data on file compared with current data from the API.
+    :return: Booleans based on bus_stop_data, bus_services_nos, bus_services
+    """
+    with open("busStop.txt", "rb") as file:
+        saved_bus_stop_data = pickle.load(file)
+    with open("busServiceNo.txt", "rb") as file:
+        saved_bus_service_nos = pickle.load(file)
+    with open("busService.txt", "rb") as file:
+        saved_bus_services = pickle.load(file)
+
+    current_bus_stop_data = get_bus_stop_data()
+    current_bus_service_nos, current_bus_services = get_bus_service_data()
+
+    return current_bus_stop_data == saved_bus_stop_data, current_bus_service_nos == saved_bus_service_nos, \
+        current_bus_services == saved_bus_services
+
+
+def save_bus_data():
+    """
+    Saves the bus data to a pickle file on disk
+    """
+    bus_stop_data = get_bus_stop_data()
+    bus_service_nos, bus_services = get_bus_service_data()
+
+    with open("busStop.txt", "wb") as outfile:
+        pickle.dump(bus_stop_data, outfile)
     with open("busServiceNo.txt", "wb") as outfile:
         pickle.dump(bus_service_nos, outfile)
     with open("busService.txt", "wb") as outfile:
         pickle.dump(bus_services, outfile)
 
 
-def main():
-    update_bus_stop_db()
-    update_bus_service_db()
-
-
 if __name__ == '__main__':
-    main()
+    save_bus_data()

@@ -4,16 +4,17 @@ from singbusbot import send_message_to_owner
 def check_commands(bot, message):
     message = message.split(" ")
     if message[0] == "/help":
-        return "<b>Help Menu</b>\n" \
+        return "*Help Menu*\n" \
                "/help - For a list of commands\n" \
                "/settings - To add favourite bus stops\n" \
                "/about - About page\n" \
                "/feedback - Send feedback straight to the developer by using this format - /feedback [text]\n" \
                "/stop - Stops the bot"
     elif message[0] == "/about":
-        return "<b>About Page</b>" \
+        return "*About Page*" \
                "\nThank you for using SingBusBot." \
-               "\nAll real-time data is provided by the Land Transport Authority and new ideas are always welcome."
+               "\nAll real-time data is provided by the Land Transport Authority, map data is provided by OneMap " \
+               "and new ideas are always welcome."
     elif message[0] == "/start":
         return "Welcome to Singapore Bus Bot! Just enter a bus stop code or bus number to find the next bus. " \
                "For example, try entering 53009 or Bishan Int or 284.\n\n" \
@@ -24,10 +25,10 @@ def check_commands(bot, message):
                "/help for more information"
     elif message[0] == "/feedback":
         if not message:
-            return "Please enter feedback"
+            return "Please enter feedback using this format. /feedback [feedback goes here]"
         else:
             if not message[1:]:
-                return "Please enter some feedback"
+                return "Please enter feedback using this format. /feedback [feedback goes here]"
             else:
                 send_message_to_owner(bot, " ".join(message[1:]))
                 return "Thank you for your feedback! \"{}\"".format(" ".join(message[1:]))

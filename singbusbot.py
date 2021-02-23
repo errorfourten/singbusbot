@@ -9,6 +9,7 @@ import psycopg2
 
 import updateBusData
 import telegramCommands
+from one_map_utils import *
 from telegram import *
 from telegram.ext import *
 from telegram.error import TimedOut
@@ -53,6 +54,20 @@ class TimedOutFilter(logging.Filter):
     def filter(self, record):
         if "Error while getting Updates: Timed out" in record.getMessage():
             return False
+        else:
+            return True
+
+
+class APSchedulerFilter(logging.Filter):
+    def filter(self, record):
+        if "_trigger_timeout" in record.getMessage():
+            return False
+        elif "bot_send_typing" in record.getMessage():
+            return False
+        elif "Removed job" in record.getMessage():
+            return False
+        else:
+            return True
 
 
 def _escape_markdown(message):
@@ -61,31 +76,44 @@ def _escape_markdown(message):
         ".": "\.",
         "(": "\(",
         ")": "\)",
+        "!": "\!",
     }
     return message.translate(str.maketrans(markdownv2_escape))
 
 
-def update_bus_data(_, __):
-    updateBusData.main()
-    logging.info("Updated Bus Data")
+def check_bus_data(_):
+    """
+    Checks if the bus data on disk is updated if not, informs the owner
+    """
+    if all(updateBusData.check_bus_data()):
+        logging.info("Bus data is up to date")
+    else:
+        logging.warning("Bus data needs to be updated")
+        send_message_to_owner(updater.bot, "WARNING: Bus data out of date")
 
 
 def broadcast_message(bot, text):
+    global conn
+    if conn.closed:
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
     cur = conn.cursor()
+
     cur.execute('''SELECT * FROM user_data WHERE state = 1''')
     row = cur.fetchall()
+
+    text = _escape_markdown(text)
     for x in row:
         chat_id = json.loads(x[0])
         try:  # Try to send a message to the user. If the user has blocked the bot, just skip
-            bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
-        except:     # TODO: Change this except clause to a more specific one
+            bot.send_message(chat_id=chat_id, text=text, parse_mode="MarkdownV2")
+        except telegram.error.Unauthorized:
             pass
     cur.close()
     logging.info("Broadcast complete")
 
 
 def send_message_to_owner(bot, message):
-    bot.send_message(user_id=OWNER_ID, text=message)
+    bot.send_message(chat_id=OWNER_ID, text=message)
 
 
 def fetch_user_favourites(user_id):
@@ -95,6 +123,9 @@ def fetch_user_favourites(user_id):
     :param user_id: Telegram User ID
     :return: List of favourite bus stops: [[Code, Saved Name],[]]
     """
+    global conn
+    if conn.closed:
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
     cur = conn.cursor()
     cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (user_id,))
     row = cur.fetchall()
@@ -137,6 +168,9 @@ def generate_reply_keyboard(favourites):
 
 
 def commands(update, context):
+    global conn
+    if conn.closed:
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
     cur = conn.cursor()
     message = update.message.text
     user = update.effective_user
@@ -163,7 +197,9 @@ def commands(update, context):
     cur.close()
     # Logs and sends message
     logging.info(f"Command: {user.first_name} [{user.username}] ({user.id}), {message}")
-    update.message.reply_text(text=reply_text, reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
+    reply_text = _escape_markdown(reply_text)
+    update.message.reply_markdown_v2(text=reply_text,
+                                     reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
 
 
 def check_valid_favourite(message):
@@ -174,9 +210,12 @@ def check_valid_favourite(message):
     :return: Favourite bus stop code if exists, else original message
     """
 
-    text = message.text
+    global conn
+    if conn.closed:
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
     cur = conn.cursor()
     cur.execute('''SELECT * FROM user_data WHERE '%s' = user_id''', (message.from_user.id,))
+    text = message.text
     row = cur.fetchall()
 
     if row:
@@ -299,20 +338,25 @@ def create_bus_timing_message(bus_stop_code, bus_stop_name):
 def send_bus_timings(update, _):
     # Assign message variable depending on request type
     if update.callback_query:
-        message = update.effective_message.text.split()[0]
-        user = update.effective_user
+        if update.callback_query.data == 'Refresh':
+            message = update.effective_message.text.split()[0]
+        elif update.callback_query.data:    # Elif the callback_query is a bus stop code
+            message = update.callback_query.data
+        else:
+            message = ""
     else:  # Check if it exists in user's favourites
         message = check_valid_favourite(update.message)
-        user = update.message.from_user
+
+    user = update.effective_user
 
     # Call function and assign to variables
     bus_stop_code, bus_stop_name = check_valid_bus_stop(message)
+    favourites = fetch_user_favourites(user.id)
+    reply_keyboard = generate_reply_keyboard(favourites)
 
     if not bus_stop_code:
-        # Informs the user that bus_stop_code was invalid & logs it
-        update.message.reply_text(text="Please enter a valid bus stop code")
-        logging.info(f"Invalid request: {user.first_name} [{user.username}] ({user.id}), {message}")
-        return
+        return search_text(_, _, update)
+
     else:
         text = create_bus_timing_message(bus_stop_code, bus_stop_name)
         text = _escape_markdown(text)
@@ -323,8 +367,8 @@ def send_bus_timings(update, _):
     ]
     reply_markup = InlineKeyboardMarkup(button_list)
 
-    # If it's a callback function,
-    if update.callback_query:
+    # If it's a callback function for refreshing,
+    if update.callback_query and update.callback_query.data == 'Refresh':
         # Reply to the user and log it
         text += f"\n_Last Refreshed: {(datetime.utcnow() + timedelta(hours=8)).strftime('%H:%M:%S')}_"
         logging.info(f"Refresh: {user.first_name} [{user.username}] ({user.id}), {message}")
@@ -334,12 +378,16 @@ def send_bus_timings(update, _):
     # Else, send a new message
     else:
         logging.info(f"Request: {user.first_name} [{user.username}] ({user.id}), {message}")
-        update.message.reply_markdown_v2(text=text, reply_markup=reply_markup)
+        update.effective_message.reply_markdown_v2(text=text, reply_markup=reply_markup)
+
+        if update.callback_query:
+            update.callback_query.answer()
 
 
-def send_location_timing(update, _):
+def search_location(update):
     user = update.message.from_user
     location = (update.message.location.latitude, update.message.location.longitude)
+
     with open("busStop.txt", "rb") as afile:
         bus_stop_db = pickle.load(afile)
 
@@ -358,12 +406,95 @@ def send_location_timing(update, _):
     update.message.reply_markdown_v2(text=text)
 
 
+def search_text(update, _, original_update=None):
+    if not original_update:
+        update.callback_query.answer()
+        _, query, user_page_num = update.callback_query.data.split(":::")
+        user_page_num = int(user_page_num)
+    else:
+        query = original_update.effective_message.text
+        user = original_update.effective_message.from_user
+        user_page_num = 1
+        logging.info(f"Search: {user.first_name} [{user.username}] ({user.id}), {query}")
+
+    def _generate_pagination(query):
+        search_page_num, results_total = 1, 0
+        all_pages, current_page = [], []
+        places_list = set()
+
+        results = search_one_map(query, search_page_num)
+        total_num_pages, num_found = results['totalNumPages'], results['found']
+
+        while True:
+            if not results['results']:
+                # Return any possible results if they have been added
+                if results_total:
+                    return all_pages, results_total
+                # If not, there are no results for the query
+                return None, 0
+
+            for place in results['results']:
+                if place['SEARCHVAL'] not in places_list:
+                    places_list.add(place['SEARCHVAL'])
+                    callback_data = str((float(place['LATITUDE']), float(place['LONGITUDE'])))
+                    current_page.append([InlineKeyboardButton(place['SEARCHVAL'], callback_data=callback_data)])
+
+                    # Ensure that only a maximum of 30 results can be found
+                    results_total += 1
+                    if results_total > 30:
+                        return False, num_found
+
+                # Creates a new page every 10 results
+                if len(current_page) == 10:
+                    all_pages.append(current_page)
+                    current_page = []
+
+            # Returns once all results have been added
+            search_page_num += 1
+            if search_page_num > total_num_pages:
+                all_pages.append(current_page)
+                return all_pages, results_total
+
+            results = search_one_map(query, search_page_num)
+
+    pagination, num_found = _generate_pagination(query)
+    reply_keyboard = None
+
+    if pagination is False:
+        text = f"🔍: {query}\n{num_found} results found.\nToo many results... Please try again"
+    elif pagination is None:
+        text = f"🔍: {query}\nNo results found... Please try again"
+    else:
+        # Selects the correct page for reply keyboard, based on the user_page_num
+        reply_keyboard = pagination[user_page_num - 1]
+
+        # Adds navigation buttons based on total number of pages in pagination
+        if len(pagination) != 1:
+            if user_page_num == 1:
+                reply_keyboard.append([InlineKeyboardButton(">", callback_data=f">:::{query}:::2")])
+            elif user_page_num == min(len(pagination), 3):
+                reply_keyboard.append([InlineKeyboardButton("<", callback_data=f"<:::{query}:::{user_page_num-1}")])
+            else:
+                reply_keyboard.append([InlineKeyboardButton("<", callback_data=f"<:::{query}:::{user_page_num-1}"),
+                                       InlineKeyboardButton(">", callback_data=f">:::{query}:::{user_page_num+1}")])
+
+        text = f"🔍: {query}\n{num_found} results found.\n\nPage: {user_page_num}/{len(pagination)}"
+        reply_keyboard = InlineKeyboardMarkup(reply_keyboard)
+
+    text = _escape_markdown(text)
+
+    if not original_update:
+        update.effective_message.edit_text(text, reply_markup=reply_keyboard, parse_mode='MarkdownV2')
+    else:
+        original_update.effective_message.reply_markdown_v2(text, reply_markup=reply_keyboard)
+
+
 #####################
 # BUS ROUTE HANDLER #
 #####################
 
 # Create a new telegram filter, filter out bus Services
-class FilterBusService(BaseFilter):
+class FilterBusService(MessageFilter):
     def filter(self, message):
         if not message.text:    # Handles non-message entities to prevent errors
             return False
@@ -374,11 +505,9 @@ class FilterBusService(BaseFilter):
 
 
 bus_service_filter = FilterBusService()
-# ConversationHandler for bus services
-SEND_BUS_SERVICE = map(chr, range(1))
 
 
-def ask_bus_route(update, context):
+def ask_bus_route(update, _):
     # Takes in bus service and outputs direction, waiting for user's confirmation
     bus_number = update.message.text.upper()
     user = update.message.from_user
@@ -391,18 +520,14 @@ def ask_bus_route(update, context):
     reply_keyboard = []
 
     # Generates a reply_keyboard with the directions
-    for direction in directions:
+    for i, direction in enumerate(directions):
         bus_stop_code_start, bus_stop_name_start = check_valid_bus_stop(direction["bus_stops"][0])
         bus_stop_code_end, bus_stop_name_end = check_valid_bus_stop(direction["bus_stops"][-1])
-        reply_keyboard.append([f"{bus_stop_name_start} - {bus_stop_name_end}"])
+        reply_keyboard.append([InlineKeyboardButton(f"{bus_stop_name_start} - {bus_stop_name_end}",
+                                                    callback_data=f"BUS ROUTE:::{bus_number}:::{i}")])
 
-    context.user_data["bus_service"] = [bus_number, reply_keyboard, directions]  # Pass the generated data to user_data
-    update.message.reply_text("Which direction?",
-                              reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True,
-                                                               resize_keyboard=True, selective=True))
+    update.message.reply_text(f"🚌 Bus {bus_number}\nWhich direction?", reply_markup=InlineKeyboardMarkup(reply_keyboard))
     logging.info(f"Service Request: {user.first_name} [{user.username}] ({user.id}), {bus_number}")
-
-    return SEND_BUS_SERVICE
 
 
 def bot_send_typing(context):
@@ -410,7 +535,6 @@ def bot_send_typing(context):
 
 
 def send_bus_route(update, context):  # Once user has replied with direction, output the arrival timings
-    reply = update.message.text
     user = update.effective_user
     job_send_typing = job.run_repeating(bot_send_typing, interval=5, first=0, context=update.effective_chat.id)
 
@@ -418,55 +542,110 @@ def send_bus_route(update, context):  # Once user has replied with direction, ou
     favourites = fetch_user_favourites(user.id)
     reply_keyboard = generate_reply_keyboard(favourites)
 
-    if [reply] in context.user_data["bus_service"][1]:  # Ensures user reply is a valid direction
-        direction = context.user_data["bus_service"][1].index([reply])  # Gets the direction in terms of a int
-        bus_number = context.user_data["bus_service"][0]
-        directions = context.user_data["bus_service"][2]
+    with open("busService.txt", "rb") as afile:
+        bus_service_db = pickle.load(afile)
 
-        header = f"Bus {str(bus_number)} ({reply})"
-        message = f"__{header}__\n"
-        flag = 0
+    _, bus_number, direction = update.callback_query.data.split(":::")
+    directions = [element for element in bus_service_db if element['service_no'] == bus_number]
+    _, bus_stop_name_start = check_valid_bus_stop(directions[int(direction)]["bus_stops"][0])
+    _, bus_stop_name_end = check_valid_bus_stop(directions[int(direction)]["bus_stops"][-1])
 
-        for bus_stop_code in directions[direction]["bus_stops"]:  # For every bus stop code in that direction
-            url = f"http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode={bus_stop_code}"
-            headers = {"AccountKey": LTA_ACCOUNT_KEY}
-            r = requests.get(url, headers=headers)
-            pjson = r.json()
+    header = f"Bus {str(bus_number)} ({bus_stop_name_start} - {bus_stop_name_end})"
+    message = f"__{header}__\n"
+    flag = 0
 
-            # Select the correct bus service from raw data
-            service = [element for element in pjson["Services"] if element['ServiceNo'] == bus_number]
-            if service:     # Get the arrival time
-                time_left, time_following_left = get_next_bus_time(service[0])
-            else:       # If there are no more buses for the day
-                time_left = "NA"
+    for bus_stop_code in directions[int(direction)]["bus_stops"]:  # For every bus stop code in that direction
+        url = f"http://datamall2.mytransport.sg/ltaodataservice/BusArrivalv2?BusStopCode={bus_stop_code}"
+        headers = {"AccountKey": LTA_ACCOUNT_KEY}
+        r = requests.get(url, headers=headers)
+        pjson = r.json()
 
-            bus_stop_code, bus_stop_name = check_valid_bus_stop(bus_stop_code)
-            text = f"*{bus_stop_name}* ( /{bus_stop_code} )   "
-            if time_left != "NA":
-                flag = 1
-            if time_left == "00":
-                text += "Arr"
-            else:
-                text += f"{time_left} min"
-            message += text + "\n"
+        # Select the correct bus service from raw data
+        service = [element for element in pjson["Services"] if element['ServiceNo'] == bus_number]
+        if service:     # Get the arrival time
+            time_left, time_following_left = get_next_bus_time(service[0])
+        else:       # If there are no more buses for the day
+            time_left = "NA"
 
-        if flag == 0:
-            message = f"__{header}__\nNo more buses at this hour"
+        bus_stop_code, bus_stop_name = check_valid_bus_stop(bus_stop_code)
+        text = f"*{bus_stop_name}* ( /{bus_stop_code} )   "
+        if time_left != "NA":
+            flag = 1
+        if time_left == "00":
+            text += "Arr"
+        else:
+            text += f"{time_left} min"
+        message += text + "\n"
 
-        job_send_typing.schedule_removal()
-        message = _escape_markdown(message)
-        update.message.reply_markdown_v2(message, reply_markup=ReplyKeyboardMarkup(reply_keyboard),
-                                         resize_keyboard=True)
-        logging.info(f"Service Request: {user.first_name} [{user.username}] ({user.username}), {header}")
+    if flag == 0:
+        message = f"__{header}__\nNo more buses at this hour"
 
-    else:
-        job_send_typing.schedule_removal()
-        update.message.reply_markdown_v2("Invalid direction", reply_markup=ReplyKeyboardMarkup(reply_keyboard),
-                                         resize_keyboard=True)
-        logging.info(f"Invalid direction: {user.first_name} [{user.username}] ({user.username}), {reply}")
+    job_send_typing.schedule_removal()
+    message = _escape_markdown(message)
+    update.callback_query.message.reply_markdown_v2(message, reply_markup=ReplyKeyboardMarkup(reply_keyboard),
+                                                    api_kwargs={'resize_keyboard': True})
 
+    logging.info(f"Service Request: {user.first_name} [{user.username}] ({user.username}), {header}")
     context.user_data.clear()
+    update.callback_query.answer()
     return ConversationHandler.END
+
+
+###############
+# ONE MAP API #
+###############
+
+
+def search_location_or_postal(update, _):
+    user = update.effective_user
+
+    if update.callback_query:
+        text = eval(update.callback_query.data)
+        lat, long = text
+    elif update.effective_message.location:
+        lat = update.message.location.latitude
+        long = update.message.location.longitude
+        text = (lat, long)
+    else:   # If it's a postal code search
+        pjson = search_one_map(update.effective_message.text)
+        if pjson['found'] == 0:
+            update.message.reply_text("Invalid postal code. Please try again")
+            logging.info(f"Invalid postal code: {user.first_name} [{user.username}] ({user.username}), "
+                         f"{update.effective_message.text}")
+            return
+        else:
+            lat = float(pjson['results'][0]['LATITUDE'])
+            long = float(pjson['results'][0]['LONGITUDE'])
+            text = update.effective_message.text
+
+    location = (lat, long)
+
+    with open("busStop.txt", "rb") as afile:
+        bus_stop_db = pickle.load(afile)
+
+    tree = spatial.KDTree(bus_stop_db[1])
+    index = tree.query(location, k=5)
+    points_to_draw = [f'[{lat}, {long}, "255,0,0"]']
+
+    buttons = []
+
+    for x in range(len(index[1])):
+        bus_stop_code = bus_stop_db[0][index[1][x]][0]
+        bus_stop_name = bus_stop_db[0][index[1][x]][1]
+        bus_stop_lat = bus_stop_db[1][index[1][x]][0]
+        bus_stop_long = bus_stop_db[1][index[1][x]][1]
+
+        # chr converts the index to capital letters
+        points_to_draw.append(f'[{bus_stop_lat}, {bus_stop_long}, "255,255,255", "{chr(x+65)}"]')
+        buttons.append([InlineKeyboardButton(text=f'{chr(x+65)}: {bus_stop_code} - {bus_stop_name}',
+                                             callback_data=bus_stop_code)])
+
+    points = "|".join(points_to_draw)
+    photo = get_one_map_map(lat, long, points)
+
+    logging.info(f"Location: {user.first_name} [{user.username}] ({user.id}), {text}")
+    update.callback_query.answer() if update.callback_query else None
+    update.effective_message.reply_photo(photo, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(buttons))
 
 
 ####################
@@ -480,6 +659,9 @@ SETTINGS, RE_SETTINGS, CANCEL, ADD_FAVOURITE, ADD_FAVOURITE_CODE, ADD_FAVOURITE_
 
 
 def settings(update, _):
+    if update.callback_query:
+        update.callback_query.message.delete()
+
     user = update.effective_user
     logging.info(f"Accessing settings: {user.first_name} [{user.username}] ({user.id})")
     favourites = fetch_user_favourites(user.id)
@@ -499,30 +681,33 @@ def settings(update, _):
             InlineKeyboardButton(text='Cancel', callback_data=str(CANCEL))
         ]]
 
-    update.message.reply_text("What would you like to do?", reply_markup=InlineKeyboardMarkup(buttons))
+    update.effective_message.reply_text("What would you like to do?", reply_markup=InlineKeyboardMarkup(buttons))
     return SETTINGS
 
 
 def add_favourite(update, context):
     context.user_data.clear()
+    buttons = [[InlineKeyboardButton(text='Back', callback_data=str(SETTINGS))]]
 
-    try:
+    if update.callback_query:
         update.callback_query.answer()
-        update.callback_query.message.edit_text("What would you like to do?")
-        update.callback_query.message.reply_text("Please enter a bus stop code")
-    except AttributeError:  # When there is no callback_query to be answered
-        update.message.reply_text("Please enter a bus stop code")
+        update.callback_query.message.reply_text("Please enter a bus stop code", reply_markup=InlineKeyboardMarkup(buttons))
+        update.callback_query.message.delete()
+    else:
+        update.message.reply_text("Please enter a bus stop code", reply_markup=InlineKeyboardMarkup(buttons))
 
     return ADD_FAVOURITE_CODE
 
 
 def choose_favourite_stop(update, context):
     message = update.message.text
+
     bus_stop_code, bus_stop_name = check_valid_bus_stop(message)
+    buttons = [[InlineKeyboardButton(text='Back', callback_data=str(ADD_FAVOURITE))]]
 
     if bus_stop_code is False:
         # Informs the user that busStopCode was invalid & logs it
-        update.message.reply_text("Try again. Please enter a valid bus stop code")
+        update.message.reply_text("Try again. Please enter a valid bus stop code", reply_markup=InlineKeyboardMarkup(buttons))
         return ADD_FAVOURITE_CODE
 
     else:
@@ -530,21 +715,28 @@ def choose_favourite_stop(update, context):
         if favourites:
             existing_favourite_codes = list(zip(*favourites))[1]    # Takes all the 1st elements of favourites
             if bus_stop_code in existing_favourite_codes:
-                update.message.reply_text("Favourite bus stop already added. Please choose another one")
+                update.message.reply_text("Favourite bus stop already added. Please choose another one",
+                                          reply_markup=InlineKeyboardMarkup(buttons))
                 return ADD_FAVOURITE_CODE
 
         context.user_data["bus_stop_code"] = bus_stop_code
-        update.message.reply_text(f"What would you like to name: {bus_stop_code} - {bus_stop_name}?")
+        update.message.reply_text(f"What would you like to name: {bus_stop_code} - {bus_stop_name}?",
+                                  reply_markup=InlineKeyboardMarkup(buttons))
+
         return ADD_FAVOURITE_NAME
 
 
 # Asks user to confirm favourite
 def choose_favourite_name(update, context):
     favourites = fetch_user_favourites(update.effective_user.id)
+
     if favourites:
         existing_favourite_names = list(zip(*favourites))[0]  # Takes all the 0th elements of favourites
         if update.message.text in existing_favourite_names:
             update.message.reply_text("Name already exists. Please choose another name.")
+            return ADD_FAVOURITE_NAME
+        elif update.message.text == 'Back':
+            update.message.reply_text("Forbidden name. Please choose another name.")
             return ADD_FAVOURITE_NAME
 
     context.user_data["bus_stop_name"] = update.message.text
@@ -569,6 +761,9 @@ def confirm_add_favourite(update, context):
     # Adds new favourite to the list
     favourites.append([context.user_data["bus_stop_name"], context.user_data["bus_stop_code"]])
     insert_sf = json.dumps(favourites)
+    global conn
+    if conn.closed:
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
     cur = conn.cursor()
     cur.execute(
         '''INSERT INTO user_data (user_id, username, first_name, favourite, state) VALUES ('%s', %s, %s, %s, 1)
@@ -593,7 +788,7 @@ def confirm_add_favourite(update, context):
     update.effective_message.reply_text("Is there anything else you would like to do?",
                                         reply_markup=InlineKeyboardMarkup(buttons))
 
-    return ConversationHandler.END
+    return SETTINGS
 
 
 def remove_favourite(update, context):
@@ -604,10 +799,12 @@ def remove_favourite(update, context):
     favourites = fetch_user_favourites(update.effective_user.id)
     context.user_data["favourites"] = favourites
     reply_keyboard = generate_reply_keyboard(favourites)
+    reply_keyboard.pop()    # Removes the location request from the keyboard
+    reply_keyboard.append([KeyboardButton(text='Back', callback_data=str(SETTINGS))])
 
-    update.callback_query.message.edit_text("What would you like to do?")
     update.callback_query.message.reply_text("What bus stop would you like to remove?",
-                                             reply_markup=ReplyKeyboardMarkup(reply_keyboard))
+                                             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
+    update.callback_query.message.delete()
     return CHECK_REMOVE_FAVOURITE
 
 
@@ -620,6 +817,7 @@ def check_remove_favourite(update, context):
             break
     else:
         reply_keyboard = generate_reply_keyboard(favourites)
+        reply_keyboard.append([InlineKeyboardButton(text='Cancel', callback_data=str(CANCEL))])
         update.message.reply_text("Please choose a valid favourite bus stop!",
                                   reply_markup=ReplyKeyboardMarkup(reply_keyboard))
         return REMOVE_FAVOURITE
@@ -643,6 +841,9 @@ def confirm_remove_favourite(update, context):
     context.user_data["favourites"].remove(context.user_data["remove"])
     favourites = context.user_data["favourites"]
     insert_sf = json.dumps(favourites)
+    global conn
+    if conn.closed:
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
     cur = conn.cursor()
     cur.execute('''UPDATE user_data SET favourite = %s WHERE user_id = '%s' ''',
                 (insert_sf, user.id))
@@ -676,7 +877,7 @@ def confirm_remove_favourite(update, context):
     update.effective_message.reply_text("Is there anything else you would like to do?",
                                         reply_markup=InlineKeyboardMarkup(buttons))
 
-    return ConversationHandler.END
+    return SETTINGS
 
 
 #########################################
@@ -690,11 +891,15 @@ def cancel(update, context):
     favourites = fetch_user_favourites(update.effective_user.id)
     reply_keyboard = generate_reply_keyboard(favourites)
 
+    if update.effective_message.reply_markup:   # Removes any inline keyboard if applicable
+        update.effective_message.edit_text(update.effective_message.text)
+
     update.effective_message.reply_text("Cancelled",
                                         reply_markup=ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True))
     if update.callback_query:
         update.callback_query.answer()
     context.user_data.clear()
+
     return ConversationHandler.END
 
 
@@ -722,17 +927,21 @@ def unknown(update, _):
 def error_callback(update, context):
     if context.error == TimedOut:
         return
-    elif context.error == psycopg2.InterfaceError:
+    elif context.error == "connection already closed":
+        # If the connection to the database gets closed, reconnect
         global conn
         conn = psycopg2.connect(DATABASE_CREDENTIALS)
         return
     else:
-        logging.warning('Update "%s" caused error "%s"', update, context.error)
+        logging.warning(f'Update "{update}" caused error "{context.error}"')
         raise context.error
 
 
 def main():
     # Create users table for initial setup
+    global conn
+    if conn.closed:
+        conn = psycopg2.connect(DATABASE_CREDENTIALS)
     cur = conn.cursor()
     cur.execute(
         "CREATE TABLE IF NOT EXISTS user_data(user_id TEXT, username TEXT, first_name TEXT, favourite TEXT, state int, "
@@ -740,27 +949,26 @@ def main():
     conn.commit()
     cur.close()
 
-    telegram_logger = logging.getLogger('telegram.ext.updater')
+    # Logging configurations
     logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+    telegram_logger = logging.getLogger('telegram.ext.updater')
     telegram_logger.addFilter(TimedOutFilter())
+    apscheduler_logger = logging.getLogger('apscheduler.scheduler')
+    apscheduler_logger.addFilter(APSchedulerFilter())
+    apexecuter_logger = logging.getLogger('apscheduler.executors.default')
+    apexecuter_logger.addFilter(APSchedulerFilter())
 
     command_handler = CommandHandler(['start', 'help', 'about', 'feedback', 'broadcast', 'stop'], commands)
     refresh_handler = CallbackQueryHandler(send_bus_timings, pattern='Refresh')
+    search_location_or_postal_handler = MessageHandler(Filters.regex('\d{6}') | Filters.location,
+                                                       search_location_or_postal)
+    search_text_location_handler = CallbackQueryHandler(search_location_or_postal, pattern='\(\d+\.\d+, \d+\.\d+\)')
+    search_text_page_handler = CallbackQueryHandler(search_text, pattern='[<>]')
     bus_handler = MessageHandler(Filters.text, send_bus_timings)
-    location_handler = MessageHandler(Filters.location, send_location_timing)
+    bus_postal_handler = CallbackQueryHandler(send_bus_timings, pattern='\d{5}')
+    bus_service_handler = MessageHandler(bus_service_filter, ask_bus_route)
+    bus_route_handler = CallbackQueryHandler(send_bus_route, pattern="BUS ROUTE")
     unknown_handler = MessageHandler(Filters.all, unknown)
-
-    bus_service_handler = ConversationHandler(
-        entry_points=[MessageHandler(bus_service_filter, ask_bus_route)],
-
-        states={
-            SEND_BUS_SERVICE: [MessageHandler(Filters.text, send_bus_route)],
-            ConversationHandler.TIMEOUT: [MessageHandler(Filters.all, timeout)],
-        },
-
-        fallbacks=[CommandHandler('cancel', cancel)],
-        conversation_timeout=30.0
-    )
 
     add_favourite_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_favourite, pattern=f'{str(ADD_FAVOURITE)}')],
@@ -772,57 +980,69 @@ def main():
                                     CallbackQueryHandler(add_favourite, pattern="ADD_NO")]
         },
 
-        fallbacks=[CommandHandler('cancel', cancel)],
+        fallbacks=[CommandHandler('cancel', cancel),
+                   CallbackQueryHandler(cancel, pattern=f"{str(CANCEL)}"),
+                   CallbackQueryHandler(settings, pattern=f"{str(SETTINGS)}"),
+                   CallbackQueryHandler(add_favourite, pattern=f"{str(ADD_FAVOURITE)}")],
 
         map_to_parent={
+            SETTINGS: SETTINGS,
             ConversationHandler.TIMEOUT: ConversationHandler.TIMEOUT,
-            ConversationHandler.END: SETTINGS
+            ConversationHandler.END: ConversationHandler.END
         },
-        conversation_timeout=30.0
+        conversation_timeout=30
     )
 
     remove_favourite_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(remove_favourite, pattern=f'{str(REMOVE_FAVOURITE)}')],
 
         states={
-            CHECK_REMOVE_FAVOURITE: [MessageHandler(Filters.text & ~Filters.command, check_remove_favourite)],
+            CHECK_REMOVE_FAVOURITE: [MessageHandler(Filters.text & ~Filters.command & ~Filters.regex('Back'),
+                                                    check_remove_favourite)],
             CONFIRM_REMOVE_FAVOURITE: [CallbackQueryHandler(confirm_remove_favourite, pattern="REMOVE_YES"),
                                        CallbackQueryHandler(remove_favourite, pattern="REMOVE_NO")]
         },
 
-        fallbacks=[CommandHandler('cancel', cancel)],
+        fallbacks=[CommandHandler('cancel', cancel),
+                   MessageHandler(Filters.regex('Back'), settings),
+                   CallbackQueryHandler(cancel, pattern=f"{str(CANCEL)}")],
 
         map_to_parent={
+            SETTINGS: SETTINGS,
             ConversationHandler.TIMEOUT: ConversationHandler.TIMEOUT,
-            ConversationHandler.END: SETTINGS,
+            ConversationHandler.END: ConversationHandler.END
         },
-        conversation_timeout=30.0
+        conversation_timeout=30
     )
 
     settings_handler = ConversationHandler(
         entry_points=[CommandHandler('settings', settings)],
 
         states={
-            SETTINGS: [CallbackQueryHandler(cancel, pattern=f'^{CANCEL}$'),
-                       add_favourite_handler, remove_favourite_handler],
-
-            CANCEL: [CallbackQueryHandler(cancel, pattern=f'^{CANCEL}$')],
+            SETTINGS: [add_favourite_handler, remove_favourite_handler],
+            CANCEL: [CallbackQueryHandler(cancel, pattern=f'{str(CANCEL)}')],
             ConversationHandler.TIMEOUT: [MessageHandler(Filters.all, timeout),
                                           CallbackQueryHandler(timeout)],
         },
 
-        fallbacks=[CommandHandler('cancel', cancel)],
-        conversation_timeout=30.0,
+        fallbacks=[CommandHandler('cancel', cancel),
+                   CallbackQueryHandler(cancel, pattern=f"{str(CANCEL)}")],
+
+        conversation_timeout=30,
         allow_reentry=True
     )
 
-    job.run_daily(update_bus_data, time(19))
+    job.run_daily(check_bus_data, time(19))
 
-    dispatcher.add_handler(location_handler)
     dispatcher.add_handler(command_handler)
     dispatcher.add_handler(settings_handler)
+    dispatcher.add_handler(search_location_or_postal_handler)
+    dispatcher.add_handler(search_text_location_handler)
+    dispatcher.add_handler(search_text_page_handler)
     dispatcher.add_handler(bus_service_handler)
+    dispatcher.add_handler(bus_route_handler)
     dispatcher.add_handler(bus_handler)
+    dispatcher.add_handler(bus_postal_handler)
     dispatcher.add_handler(refresh_handler)
     dispatcher.add_handler(unknown_handler)
     dispatcher.add_error_handler(error_callback)
