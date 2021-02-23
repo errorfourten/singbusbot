@@ -655,6 +655,9 @@ SETTINGS, RE_SETTINGS, CANCEL, ADD_FAVOURITE, ADD_FAVOURITE_CODE, ADD_FAVOURITE_
 
 
 def settings(update, _):
+    if update.callback_query:
+        update.callback_query.message.delete()
+
     user = update.effective_user
     logging.info(f"Accessing settings: {user.first_name} [{user.username}] ({user.id})")
     favourites = fetch_user_favourites(user.id)
@@ -674,7 +677,7 @@ def settings(update, _):
             InlineKeyboardButton(text='Cancel', callback_data=str(CANCEL))
         ]]
 
-    update.message.reply_text("What would you like to do?", reply_markup=InlineKeyboardMarkup(buttons))
+    update.effective_message.reply_text("What would you like to do?", reply_markup=InlineKeyboardMarkup(buttons))
     return SETTINGS
 
 
@@ -684,8 +687,8 @@ def add_favourite(update, context):
 
     if update.callback_query:
         update.callback_query.answer()
-        update.callback_query.message.edit_text("What would you like to do?")
         update.callback_query.message.reply_text("Please enter a bus stop code", reply_markup=InlineKeyboardMarkup(buttons))
+        update.callback_query.message.delete()
     else:
         update.message.reply_text("Please enter a bus stop code", reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -694,8 +697,6 @@ def add_favourite(update, context):
 
 def choose_favourite_stop(update, context):
     message = update.message.text
-    if update.effective_message.reply_markup:   # Removes any inline keyboard if applicable
-        update.effective_message.edit_text(update.effective_message.text)
 
     bus_stop_code, bus_stop_name = check_valid_bus_stop(message)
     buttons = [[InlineKeyboardButton(text='Back', callback_data=str(ADD_FAVOURITE))]]
@@ -723,22 +724,18 @@ def choose_favourite_stop(update, context):
 
 # Asks user to confirm favourite
 def choose_favourite_name(update, context):
-    update.message.edit_text(update.message.text)
     favourites = fetch_user_favourites(update.effective_user.id)
-    buttons = [[InlineKeyboardButton(text='Back', callback_data=str(ADD_FAVOURITE_CODE))]]
 
     if favourites:
         existing_favourite_names = list(zip(*favourites))[0]  # Takes all the 0th elements of favourites
         if update.message.text in existing_favourite_names:
-            update.message.reply_text("Name already exists. Please choose another name.",
-                                      reply_markup=InlineKeyboardMarkup(buttons))
+            update.message.reply_text("Name already exists. Please choose another name.")
             return ADD_FAVOURITE_NAME
 
     context.user_data["bus_stop_name"] = update.message.text
 
     buttons = [[InlineKeyboardButton(text='Yes', callback_data='ADD_YES'),
-               InlineKeyboardButton(text='No', callback_data='ADD_NO')],
-               [InlineKeyboardButton(text='Back', callback_data=str(ADD_FAVOURITE_CODE))]]
+               InlineKeyboardButton(text='No', callback_data='ADD_NO')]]
 
     reply_message = f"Please confirm that you would like to add " \
                     f"{context.user_data['bus_stop_name']} - {context.user_data['bus_stop_code']}"
@@ -750,7 +747,6 @@ def choose_favourite_name(update, context):
 
 # Adds favourite into database
 def confirm_add_favourite(update, context):
-    update.message.edit_text(update.message.text)
     user = update.effective_user
     favourites = fetch_user_favourites(user.id)
     context.user_data["favourites"] = favourites
@@ -796,17 +792,17 @@ def remove_favourite(update, context):
     favourites = fetch_user_favourites(update.effective_user.id)
     context.user_data["favourites"] = favourites
     reply_keyboard = generate_reply_keyboard(favourites)
-    reply_keyboard.append([KeyboardButton(text='Cancel', callback_data=str(CANCEL))])
+    reply_keyboard.pop()    # Removes the location request from the keyboard
+    reply_keyboard.append([KeyboardButton(text='Back', callback_data=str(SETTINGS))])
 
-    update.callback_query.message.edit_text("What would you like to do?")
     update.callback_query.message.reply_text("What bus stop would you like to remove?",
                                              reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
+    update.callback_query.message.delete()
     return CHECK_REMOVE_FAVOURITE
 
 
 # Asks user to confirm removing bus stop
 def check_remove_favourite(update, context):
-    update.message.edit_text(update.message.text)
     favourites = context.user_data["favourites"]
     for favourite in favourites:
         if update.message.text == favourite[0]:
@@ -822,8 +818,7 @@ def check_remove_favourite(update, context):
     context.user_data["remove"] = stop_to_remove
 
     buttons = [[InlineKeyboardButton(text='Yes', callback_data='REMOVE_YES'),
-                InlineKeyboardButton(text='No', callback_data='REMOVE_NO')],
-               [InlineKeyboardButton(text='Cancel', callback_data=str(CANCEL))]]
+                InlineKeyboardButton(text='No', callback_data='REMOVE_NO')]]
     reply_message = f"Are you sure you want to remove {stop_to_remove[0]} - {stop_to_remove[1]}?"
     context.user_data["previous_message"] = reply_message
 
@@ -833,7 +828,6 @@ def check_remove_favourite(update, context):
 
 
 def confirm_remove_favourite(update, context):
-    update.message.edit_text(update.message.text)
     user = update.effective_user
 
     # Inserts the new list into the database
@@ -979,7 +973,10 @@ def main():
                                     CallbackQueryHandler(add_favourite, pattern="ADD_NO")]
         },
 
-        fallbacks=[CommandHandler('cancel', cancel)],
+        fallbacks=[CommandHandler('cancel', cancel),
+                   CallbackQueryHandler(cancel, pattern=f"{str(CANCEL)}"),
+                   CallbackQueryHandler(settings, pattern=f"{str(SETTINGS)}"),
+                   CallbackQueryHandler(add_favourite, pattern=f"{str(ADD_FAVOURITE)}")],
 
         map_to_parent={
             SETTINGS: SETTINGS,
@@ -993,12 +990,15 @@ def main():
         entry_points=[CallbackQueryHandler(remove_favourite, pattern=f'{str(REMOVE_FAVOURITE)}')],
 
         states={
-            CHECK_REMOVE_FAVOURITE: [MessageHandler(Filters.text & ~Filters.command, check_remove_favourite)],
+            CHECK_REMOVE_FAVOURITE: [MessageHandler(Filters.text & ~Filters.command & ~Filters.regex('Back'),
+                                                    check_remove_favourite)],
             CONFIRM_REMOVE_FAVOURITE: [CallbackQueryHandler(confirm_remove_favourite, pattern="REMOVE_YES"),
                                        CallbackQueryHandler(remove_favourite, pattern="REMOVE_NO")]
         },
 
-        fallbacks=[CommandHandler('cancel', cancel)],
+        fallbacks=[CommandHandler('cancel', cancel),
+                   MessageHandler(Filters.regex('Back'), settings),
+                   CallbackQueryHandler(cancel, pattern=f"{str(CANCEL)}")],
 
         map_to_parent={
             SETTINGS: SETTINGS,
@@ -1012,15 +1012,15 @@ def main():
         entry_points=[CommandHandler('settings', settings)],
 
         states={
-            SETTINGS: [CallbackQueryHandler(cancel, pattern=f'^{CANCEL}$'),
-                       add_favourite_handler, remove_favourite_handler],
-
-            CANCEL: [CallbackQueryHandler(cancel, pattern=f'^{CANCEL}$')],
+            SETTINGS: [add_favourite_handler, remove_favourite_handler],
+            CANCEL: [CallbackQueryHandler(cancel, pattern=f'{str(CANCEL)}')],
             ConversationHandler.TIMEOUT: [MessageHandler(Filters.all, timeout),
                                           CallbackQueryHandler(timeout)],
         },
 
-        fallbacks=[CommandHandler('cancel', cancel)],
+        fallbacks=[CommandHandler('cancel', cancel),
+                   CallbackQueryHandler(cancel, pattern=f"{str(CANCEL)}")],
+
         conversation_timeout=30,
         allow_reentry=True
     )
