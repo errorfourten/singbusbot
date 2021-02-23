@@ -601,7 +601,7 @@ def send_bus_route(update, context):  # Once user has replied with direction, ou
     update.callback_query.message.reply_markdown_v2(message, reply_markup=ReplyKeyboardMarkup(reply_keyboard),
                                                     api_kwargs={'resize_keyboard': True})
 
-    logging.info(f"Service Request: {user.first_name} [{user.username}] ({user.username}), {header}")
+    logging.info(f"Service Request: {user.first_name} [{user.username}] ({user.id}), {header}")
     context.user_data.clear()
     update.callback_query.answer()
     return ConversationHandler.END
