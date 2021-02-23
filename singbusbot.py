@@ -108,6 +108,11 @@ def broadcast_message(bot, text):
             bot.send_message(chat_id=chat_id, text=text, parse_mode="MarkdownV2")
         except telegram.error.Unauthorized:
             pass
+        except telegram.error.BadRequest:
+            pass
+        except Exception as e:
+            logging.error(e)
+            pass
     cur.close()
     logging.info("Broadcast complete")
 
