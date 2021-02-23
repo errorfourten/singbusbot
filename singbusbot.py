@@ -531,7 +531,6 @@ def bot_send_typing(context):
 
 
 def send_bus_route(update, context):  # Once user has replied with direction, output the arrival timings
-    update.callback_query.answer()
     user = update.effective_user
     job_send_typing = job.run_repeating(bot_send_typing, interval=5, first=0, context=update.effective_chat.id)
 
@@ -584,6 +583,7 @@ def send_bus_route(update, context):  # Once user has replied with direction, ou
 
     logging.info(f"Service Request: {user.first_name} [{user.username}] ({user.username}), {header}")
     context.user_data.clear()
+    update.callback_query.answer()
     return ConversationHandler.END
 
 
@@ -596,7 +596,6 @@ def search_location_or_postal(update, _):
     user = update.effective_user
 
     if update.callback_query:
-        update.callback_query.answer()
         text = eval(update.callback_query.data)
         lat, long = text
     elif update.effective_message.location:
@@ -641,6 +640,7 @@ def search_location_or_postal(update, _):
     photo = get_one_map_map(lat, long, points)
 
     logging.info(f"Location: {user.first_name} [{user.username}] ({user.id}), {text}")
+    update.callback_query.answer() if update.callback_query else None
     update.effective_message.reply_photo(photo, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(buttons))
 
 
