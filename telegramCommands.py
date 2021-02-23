@@ -25,10 +25,10 @@ def check_commands(bot, message):
                "/help for more information"
     elif message[0] == "/feedback":
         if not message:
-            return "Please enter feedback"
+            return "Please enter feedback using this format. /feedback [feedback goes here]"
         else:
             if not message[1:]:
-                return "Please enter some feedback"
+                return "Please enter feedback using this format. /feedback [feedback goes here]"
             else:
                 send_message_to_owner(bot, " ".join(message[1:]))
                 return "Thank you for your feedback! \"{}\"".format(" ".join(message[1:]))
