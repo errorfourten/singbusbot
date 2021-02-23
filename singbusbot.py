@@ -76,6 +76,7 @@ def _escape_markdown(message):
         ".": "\.",
         "(": "\(",
         ")": "\)",
+        "!": "\!",
     }
     return message.translate(str.maketrans(markdownv2_escape))
 
@@ -99,6 +100,8 @@ def broadcast_message(bot, text):
 
     cur.execute('''SELECT * FROM user_data WHERE state = 1''')
     row = cur.fetchall()
+
+    text = _escape_markdown(text)
     for x in row:
         chat_id = json.loads(x[0])
         try:  # Try to send a message to the user. If the user has blocked the bot, just skip
