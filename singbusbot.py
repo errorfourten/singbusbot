@@ -116,6 +116,19 @@ def send_message_to_owner(bot, message):
     bot.send_message(chat_id=OWNER_ID, text=message)
 
 
+def send_message_to_user(bot, user_id, text):
+    text = _escape_markdown(text)
+    try:
+        bot.send_message(chat_id=user_id, text=text, parse_mode="MarkdownV2")
+        bot.send_message(chat_id=OWNER_ID, text=f"Sent message to user {user_id}\!\n\n{text}", parse_mode="MarkdownV2")
+    except telegram.error.Unauthorized:
+        bot.send_message(chat_id=OWNER_ID, text=f"Message to user {user_id} is unauthorized")
+    except Exception as e:
+        bot.send_message(chat_id=OWNER_ID, text=f"Error occurred when sending message to user {user_id}\n\n"
+                                                f"```{_escape_markdown(str(e))}```",
+                         parse_mode="MarkdownV2")
+
+
 def fetch_user_favourites(user_id):
     """
     Returns a list of the user's favourite bus stops
@@ -178,6 +191,9 @@ def commands(update, context):
 
     if '/broadcast' in message and user.id == int(OWNER_ID):
         broadcast_message(context.bot, reply_text)
+    elif '/message' in message and user.id == int(OWNER_ID):
+        send_message_to_user(context.bot, reply_text[0], reply_text[1])
+        reply_text = reply_text[1]
     elif message == '/start':
         # Adds a new row of data for new users
         cur.execute(
@@ -958,7 +974,7 @@ def main():
     apexecuter_logger = logging.getLogger('apscheduler.executors.default')
     apexecuter_logger.addFilter(APSchedulerFilter())
 
-    command_handler = CommandHandler(['start', 'help', 'about', 'feedback', 'broadcast', 'stop'], commands)
+    command_handler = CommandHandler(['start', 'help', 'about', 'feedback', 'broadcast', 'message', 'stop'], commands)
     refresh_handler = CallbackQueryHandler(send_bus_timings, pattern='Refresh')
     search_location_or_postal_handler = MessageHandler(Filters.regex('\d{6}') | Filters.location,
                                                        search_location_or_postal)
