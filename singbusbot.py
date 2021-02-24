@@ -429,7 +429,6 @@ def search_location(update):
 
 def search_text(update, _, original_update=None):
     if not original_update:
-        update.callback_query.answer()
         _, query, user_page_num = update.callback_query.data.split(":::")
         user_page_num = int(user_page_num)
     else:
@@ -506,6 +505,7 @@ def search_text(update, _, original_update=None):
 
     if not original_update:
         update.effective_message.edit_text(text, reply_markup=reply_keyboard, parse_mode='MarkdownV2')
+        update.callback_query.answer()
     else:
         original_update.effective_message.reply_markdown_v2(text, reply_markup=reply_keyboard)
 
@@ -953,7 +953,7 @@ def error_callback(update, context):
         global conn
         conn = psycopg2.connect(DATABASE_CREDENTIALS)
         return
-    elif context.error == "Query is too old and response timeout expired or query id is invalid":
+    elif context.error.message == "Query is too old and response timeout expired or query id is invalid":
         return
     else:
         logging.warning(f'Update "{update}" caused error "{context.error}"')
