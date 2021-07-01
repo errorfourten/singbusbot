@@ -360,6 +360,10 @@ def send_bus_timings(update, _):
     # Assign message variable depending on request type
     if update.callback_query:
         if update.callback_query.data == 'Refresh':
+            if not update.effective_message.text:   # If callback query is too old
+                update.effective_message.reply_text("Previous message is too old. Please resend your request.")
+                return update.callback_query.answer()
+
             message = update.effective_message.text.split()[0]
         elif update.callback_query.data:    # Elif the callback_query is a bus stop code
             message = update.callback_query.data
