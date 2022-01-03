@@ -44,7 +44,7 @@ def get_bus_service_data():
     """
     tempdict = {}
     bus_services = []
-    bus_service_nos = set()
+    bus_service_nos = list()
     active_service = ""
 
     pjson_len, i = 500, 0
@@ -66,7 +66,7 @@ def get_bus_service_data():
                             "direction": str(service["Direction"]), "bus_stops": []}
                 active_service = current_service
 
-            bus_service_nos.add(service["ServiceNo"])       # Add bus numbers to the set
+            bus_service_nos.append(service["ServiceNo"])       # Add bus numbers to the set
             tempdict["bus_stops"].append(service["BusStopCode"])       # Add bus stop code for every service
 
         pjson_len = len(pjson["value"])
@@ -102,11 +102,11 @@ def save_bus_data():
     bus_stop_data = get_bus_stop_data()
     bus_service_nos, bus_services = get_bus_service_data()
 
-    with open("busStop.txt", "wb") as outfile:
+    with open("busStop.pkl", "wb") as outfile:
         pickle.dump(bus_stop_data, outfile)
-    with open("busServiceNo.txt", "wb") as outfile:
+    with open("busServiceNo.pkl", "wb") as outfile:
         pickle.dump(bus_service_nos, outfile)
-    with open("busService.txt", "wb") as outfile:
+    with open("busService.pkl", "wb") as outfile:
         pickle.dump(bus_services, outfile)
 
 

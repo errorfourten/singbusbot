@@ -266,8 +266,8 @@ def check_valid_bus_stop(message):
 
     # Converts message to a processable form
     message = "".join([x.lower() for x in message if x.isalnum()])
-    # Loads bus stop database from busStop.txt
-    with open("busStop.txt", "rb") as afile:
+    # Loads bus stop database from busStop.pkl
+    with open("busStop.pkl", "rb") as afile:
         bus_stop_db = pickle.load(afile)
 
     # For each bus stop in the database, check if passed message is found
@@ -413,7 +413,7 @@ def search_location(update):
     user = update.message.from_user
     location = (update.message.location.latitude, update.message.location.longitude)
 
-    with open("busStop.txt", "rb") as afile:
+    with open("busStop.pkl", "rb") as afile:
         bus_stop_db = pickle.load(afile)
 
     text = ""
@@ -523,7 +523,7 @@ class FilterBusService(MessageFilter):
     def filter(self, message):
         if not message.text:    # Handles non-message entities to prevent errors
             return False
-        with open("busServiceNo.txt", "rb") as afile:
+        with open("busServiceNo.pkl", "rb") as afile:
             data = pickle.load(afile)
             bus_services = {service.upper() for service in data}
         return message.text.upper() in bus_services
@@ -537,7 +537,7 @@ def ask_bus_route(update, _):
     bus_number = update.message.text.upper()
     user = update.message.from_user
 
-    with open("busService.txt", "rb") as afile:
+    with open("busService.pkl", "rb") as afile:
         bus_service_db = pickle.load(afile)
 
     # Find the direction(s) out that bus service
@@ -567,7 +567,7 @@ def send_bus_route(update, context):  # Once user has replied with direction, ou
     favourites = fetch_user_favourites(user.id)
     reply_keyboard = generate_reply_keyboard(favourites)
 
-    with open("busService.txt", "rb") as afile:
+    with open("busService.pkl", "rb") as afile:
         bus_service_db = pickle.load(afile)
 
     _, bus_number, direction = update.callback_query.data.split(":::")
@@ -645,7 +645,7 @@ def search_location_or_postal(update, _):
 
     location = (lat, long)
 
-    with open("busStop.txt", "rb") as afile:
+    with open("busStop.pkl", "rb") as afile:
         bus_stop_db = pickle.load(afile)
 
     tree = spatial.KDTree(bus_stop_db[1])
